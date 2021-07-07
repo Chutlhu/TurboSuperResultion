@@ -132,5 +132,58 @@ class DataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_dataset, 1)
 
+
+
+class MyPatchDataset(torch.utils.data.Dataset):
+  'Characterizes a dataset for PyTorch'
+  def __init__(self, X, y):
+
+        'Initialization'
+        self.X = X
+        self.y = y
+
+        assert len(X) == len(y)
+
+        self.size = len(X)
+
+
+  def __len__(self):
+        'Denotes the total number of samples'
+        return self.size
+
+    
+  def __getitem__(self, index):
+        'Generates one sample of data'
+        # Load data and get label
+        X = torch.from_numpy(self.X[index]).float() #XY x 2 (x,y)
+        y = torch.from_numpy(self.y[index]).float()  #XxYx3 (RGB)
+
+        return X, y
+
+
+class PatchDataModule(pl.LightningDataModule):
+    def __init__(self, train_data, val_data, test_data, batch_size=64):
+        
+        super().__init__()
+        self.batch_size = 1
+        self.train_data = train_data
+        self.test_data = test_data
+        self.val_data = val_data
+        self.batch_size = batch_size
+        
+    def prepare_data(self):
+        self.train_dataset = MyPatchDataset(self.train_data[0], self.train_data[1])
+        self.val_dataset = MyPatchDataset(self.val_data[0], self.val_data[1])
+        self.test_dataset = MyPatchDataset(self.test_data[0], self.test_data[1])
+    
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=8)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=True)
+
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=True)
+
 if __name__ == '__main__':
     pass

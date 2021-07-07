@@ -412,6 +412,7 @@ class FNO2d(nn.Module):
         self.fc2 = nn.Linear(128, 2)
 
     def forward(self, x):
+
         batchsize = x.shape[0]
         size_x, size_y = x.shape[1], x.shape[2]
         

@@ -69,7 +69,8 @@ def powerspec(data):
     # print ("centerbox     =",centerx)
     # print ("centerboy     =",centery)
                 
-    EK_U_avsphr = np.zeros(box_radius,)+eps ## size of the radius
+    EK_U_avsphr = np.zeros(box_radius,)+eps ## size of the radius1234
+    
 
     for i in range(box_sidex):
         for j in range(box_sidey):
@@ -92,8 +93,8 @@ def plot_energy_spec(K, ax=None, label=''):
         plt.loglog(np.arange(0,realsize),((K[0:realsize] )),'k', label=label)
         # plt.loglog(np.arange(realsize,len(K),1),((K[realsize:] )),'k--')    
         
-        axes = plt.gca()
-        axes.set_ylim([10**-25,10])
+        ax = plt.gca()
+        ax.set_ylim([10**-25,10])
 
     else:
 
