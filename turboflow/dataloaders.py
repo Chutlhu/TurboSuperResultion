@@ -41,7 +41,7 @@ class FFMDataset(torch.utils.data.Dataset):
 
         return X, y
     
-
+    
 class FFMDataModule(pl.LightningDataModule):
     def __init__(self, img, training_downsampling_factor=2, batch_size = 1):
         
@@ -133,7 +133,6 @@ class DataModule(pl.LightningDataModule):
         return DataLoader(self.test_dataset, 1)
 
 
-
 class MyPatchDataset(torch.utils.data.Dataset):
   'Characterizes a dataset for PyTorch'
   def __init__(self, X, y):
@@ -184,6 +183,10 @@ class PatchDataModule(pl.LightningDataModule):
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=True)
+
+
+
+
 
 if __name__ == '__main__':
     pass

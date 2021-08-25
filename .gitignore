@@ -130,3 +130,4 @@ MNIST
 
 figures/
 pytorch_wavelets/
+torch_checkpoints/
