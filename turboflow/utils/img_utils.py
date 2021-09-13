@@ -25,4 +25,3 @@ def bilinear_interpolate(im, x, y):
     wd = (x-x0) * (y-y0)
 
     return wa*Ia + wb*Ib + wc*Ic + wd*Id
-

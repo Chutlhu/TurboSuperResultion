@@ -185,7 +185,43 @@ class PatchDataModule(pl.LightningDataModule):
         return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=True)
 
 
+class Turbo2D_simple(Dataset):
+    
+    def __init__(self, path_to_turbo2D, device, img=42):
+        
+        print('Dataset Turbo2D, img #', img)
 
+        IMGs = np.load(path_to_turbo2D)
+        X = IMGs[img,::4,::4,:2] / 255
+        U = IMGs[img,::4,::4,2:]
+
+        print(X.shape)
+        print(U.shape)
+
+        original_size = X.shape[0]
+        print('Original size', original_size)
+
+        # normalize output
+        y = U.copy()
+        print('Y shape', y.shape)
+        print('Y min, max:', np.min(y), np.max(y))
+        y = y / np.max(np.abs(y))
+        print('after normalization, Y min, max:', np.min(y), np.max(y))
+
+        self.x = torch.from_numpy(X).float().to(device).view(-1,2)
+        self.y = torch.from_numpy(y).float().to(device).view(-1,2)
+
+        assert self.x.shape[0] == self.y.shape[0]
+
+    
+    def __len__(self):
+        return self.x.shape[0]
+    
+
+    def __getitem__(self, idx):
+        x = self.x[idx,:]
+        y = self.y[idx,:]
+        return (x, y)
 
 
 if __name__ == '__main__':
