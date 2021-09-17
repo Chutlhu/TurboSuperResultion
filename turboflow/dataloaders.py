@@ -185,15 +185,40 @@ class PatchDataModule(pl.LightningDataModule):
         return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=True)
 
 
+def load_turbo2D_simple_numpy(ds=4):
+
+    path_to_turbo2D = '../data/2021-Turb2D_velocities.npy'
+    IMGs = np.load(path_to_turbo2D)
+    img = 42
+    X = IMGs[img,::ds,::ds,:2] / 255
+    U = IMGs[img,::ds,::ds,2:]
+
+    # normalize output
+    y = U.copy()
+    print('Y shape', y.shape)
+    print('Y min, max:', np.min(y), np.max(y))
+    y = y / np.max(np.abs(y))
+    print('after normalization, Y min, max:', np.min(y), np.max(y))
+
+    X = X.reshape(-1,2)
+    y = y.reshape(-1,2)
+
+    assert X.shape == y.shape
+
+    return X, y
+
+
+
+
 class Turbo2D_simple(Dataset):
     
-    def __init__(self, path_to_turbo2D, device, img=42):
+    def __init__(self, path_to_turbo2D, device, ds=4, img=42):
         
         print('Dataset Turbo2D, img #', img)
 
         IMGs = np.load(path_to_turbo2D)
-        X = IMGs[img,::4,::4,:2] / 255
-        U = IMGs[img,::4,::4,2:]
+        X = IMGs[img,::ds,::ds,:2] / 255
+        U = IMGs[img,::ds,::ds,2:]
 
         print(X.shape)
         print(U.shape)

@@ -109,3 +109,20 @@ def plot_energy_spec(K, ax=None, label=''):
         ax.set_ylim([10**-25,10])
 
     return ax
+
+
+def compute_stucture_function(u, direction='h'):
+    # u must be HxWx2
+    assert len(u.shape) == 3 
+    assert u[2] == 2
+
+    sfun2 = lambda x, xd : (x - xd)**2
+    sfun3 = lambda x, xd : (x - xd)**3
+
+    if direction == 'u':
+        pass
+
+    return 
+
+
+

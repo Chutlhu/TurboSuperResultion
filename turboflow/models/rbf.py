@@ -60,7 +60,6 @@ class RBFNet(nn.Module):
         nn.init.constant_(self.log_sigmas, 0.5)
         nn.init.kaiming_uniform_(self.coeffs, a=2.236) # coefficients init
 
-
     def forward(self, x):
         size = (x.size(0), self.n_centers, self.in_features)
         x = x.unsqueeze(1).expand(size)
@@ -70,6 +69,7 @@ class RBFNet(nn.Module):
         x = x @ self.coeffs
         x = F.tanh(x)
         return x
+
 
 # class RBFNet_divFree(nn.Module):
 #     def __init__(self, num_features=2, num_centers=100, device='cpu'):
