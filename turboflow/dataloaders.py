@@ -185,11 +185,11 @@ class PatchDataModule(pl.LightningDataModule):
         return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=True)
 
 
-def load_turbo2D_simple_numpy(ds=4):
+def load_turbo2D_simple_numpy(ds=4, img=42):
 
     path_to_turbo2D = '../data/2021-Turb2D_velocities.npy'
     IMGs = np.load(path_to_turbo2D)
-    img = 42
+    img = img
     X = IMGs[img,::ds,::ds,:2] / 255
     U = IMGs[img,::ds,::ds,2:]
 
@@ -231,6 +231,7 @@ class Turbo2D_simple(Dataset):
         print('Y shape', y.shape)
         print('Y min, max:', np.min(y), np.max(y))
         y = y / np.max(np.abs(y))
+        
         print('after normalization, Y min, max:', np.min(y), np.max(y))
 
         self.x = torch.from_numpy(X).float().to(device).view(-1,2)

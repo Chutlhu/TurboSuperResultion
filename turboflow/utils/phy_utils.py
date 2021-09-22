@@ -13,11 +13,28 @@ def compute_divergence(U, V):
     dVx, dVy = np.gradient(V)
     return dUx + dVy
 
+
 def compute_magnitude(U, V):
     return np.sqrt(U**2 + V**2)
 
 
-def plot_field(U,V,scale=5,step=20,img=None, ax=None):
+def divergence(f, sp, indexing = "xy"):
+    """ 
+    Computes divergence of vector field 
+    f: array -> vector field components [Fx,Fy,Fz,...]
+    sp: array -> spacing between points in respecitve directions [spx, spy,spz,...]
+    indexing: "xy" or "ij", see np.meshgrid indexing 
+
+    """
+    num_dims = len(f)
+    
+    if indexing == "xy":
+        return np.ufunc.reduce(np.add, [np.gradient(f[num_dims - i - 1], sp[i], axis=i) for i in range(num_dims)])
+    if indexing == "ij":
+        return np.ufunc.reduce(np.add, [np.gradient(f[i], sp[i], axis=i) for i in range(num_dims)])
+
+
+def plot_field(U, V, scale=5, step=20, img=None, ax=None):
     """
     Created on Tue Sep 15 13:22:23 2015​
     @author: corpetti
