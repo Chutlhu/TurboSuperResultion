@@ -75,6 +75,7 @@ class PiRFFNet(nn.Module):
             for x_batch, y_batch in trainloader:
                 batches += 1
                 optimiser.zero_grad()
+                
                 x_batch.requires_grad_(True)
 
                 y_hat = self.forward(x_batch)
