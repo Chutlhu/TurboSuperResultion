@@ -99,21 +99,22 @@ class SfunRFFNet(nn.Module):
             # TRAINING ON LR IMAGEs
             for x_batch, y_batch in trainloader:
                 batches += 1
-                optimiser.zero_grad()
                 
                 x_batch.requires_grad_(True)
 
+                # 1. FORWARD
                 y_hat = self.forward(x_batch)
-                loss_rec = F.mse_loss(y_hat, y_batch)
 
-                # compute soft constraint
+                # 2. LOSSes COMPUTATIN
+                # 2.a reconstruction loss 
+                loss_rec = F.mse_loss(y_hat, y_batch)
+                # 2.b soft constraint loss
                 u, v = torch.split(y_hat,1,-1)
                 du_x = torch.autograd.grad(u, x_batch, torch.ones_like(u), create_graph=True)[0]       
                 dv_y = torch.autograd.grad(v, x_batch, torch.ones_like(v), create_graph=True)[0]
                 div_u = du_x[...,0] + dv_y[...,1]
                 loss_pde = torch.norm(div_u)
-
-                # compute sfun-based loss
+                # 2.c Sfun-based loss
                 patches_xcenter_xincrement = self.make_offgrid_patches_xcenter_xincrement()
                 x = patches_xcenter_xincrement
                 I, C, P, P, D = x.shape
@@ -122,52 +123,24 @@ class SfunRFFNet(nn.Module):
                 Sfun2 = torch.mean((y_hat - y_hat[0,...])**2, dim=[1,2,3,4])
                 p = 1
                 loss_sfun = torch.sum(torch.abs(torch.log(Sfun2+1e-10) - torch.log(self.sfun_model+1e-10)**p))
-            
-                # TOTAL LOSS
+                # 2.d total loss
                 loss = loss_rec + self.lam_sfun*loss_sfun + self.lam_pde*loss_pde
-
                 current_loss += (1/batches) * (loss.item() - current_loss)
 
+                # BACKWARD
+                optimiser.zero_grad()
                 loss.backward()
+
+                # GRADIEN DESC or ADAM STEP
                 optimiser.step()
+
+                # LOG PROGESS
                 progress += y_batch.size(0)
                 if epoch % 100 == 0:
                     print('Epoch: %d, Loss: (%f + %f + %f) = %f' % (epoch, loss_rec.item(), 
                                                         self.lam_sfun*loss_sfun.item(),
                                                         self.lam_pde*loss_pde.item(),
                                                         current_loss))
-                    # print('Epoch: %d, Loss: (%f + %f) = %f' % (epoch, loss_rec.item(), loss_pde.item(), current_loss))
-
-                
-                #     # plot to check
-                #     plt.title('Loss Sfun2 %f' % loss.item())
-                #     plt.loglog(Sfun2.detach().cpu().numpy())
-                #     plt.loglog(self.sfun_model.detach().cpu().numpy())
-                #     plt.show()
-
-                # # get the anchor patch
-                # x_anc = patches_xcenter_xincrement[0,c,...].view(-1,2)
-                # y_hat_anc = self.forward(x_anc)
-                # print(y_hat_anc)
-            
-                # # for each shift of the patches
-                # for i in range(1,I): 
-
-                #     optimiser.zero_grad()
-
-                #     x = patches_xcenter_xincrement[i,c,...].view(-1,2)
-                #     y_hat = self.forward(x)
-
-                #     S2 = self.sfun(y_hat, y_hat_anc)
-
-                #     print(S2)
-                #     print(self.sfun_model[i])
-                #     loss = torch.norm(S2 - self.sfun_model[i])**2
-
-                #     loss.backward()
-                #     optimiser.step()
-
-                #     print('Regularization step', loss.item())
 
         print('Done with Training')
         print('Final error:', current_loss)

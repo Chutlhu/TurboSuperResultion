@@ -208,6 +208,59 @@ def load_turbo2D_simple_numpy(ds=4, img=42):
     return X, y
 
 
+class Turbo2D_simple_with_neighbours(Dataset):
+    
+    def __init__(self, path_to_turbo2D, device, ds=4, img=42):
+        
+        print('Dataset Turbo2D, img #', img)
+
+        IMGs = np.load(path_to_turbo2D)
+        X = IMGs[img,::ds,::ds,:2] / 255
+        U = IMGs[img,::ds,::ds,2:]
+
+        print(X.shape)
+        print(U.shape)
+
+        original_size = X.shape[0]
+        print('Original size', original_size)
+
+        # normalize output
+        y = U.copy()
+        print('Y shape', y.shape)
+        print('Y min, max:', np.min(y), np.max(y))
+        y = y / np.max(np.abs(y))
+        
+        print('after normalization, Y min, max:', np.min(y), np.max(y))
+
+        self.x = torch.from_numpy(X).float().to(device).view(-1,2)
+        self.y = torch.from_numpy(y).float().to(device).view(-1,2)
+
+        # make context patches of 3x3
+        L = X.shape[0]
+        P = 3
+        assert P == 3
+        self.c = torch.zeros((L,L,P,P))
+        for i in range(L):
+            for j in range(L):
+                for ii in range(P):
+                    for jj in range(P):
+                        self.c[i,j,ii,jj] = self.y[ii-1,jj-1]
+        self.c = self.c.view(-1,P*P)
+
+
+        assert self.x.shape[0] == self.y.shape[0]
+
+    
+    def __len__(self):
+        return self.x.shape[0]
+    
+
+    def __getitem__(self, idx):
+        x = self.x[idx,:]
+        c = self.c[idx,:]
+        y = self.y[idx,:]
+        return (x, c, y)
+
 
 
 class Turbo2D_simple(Dataset):

@@ -46,9 +46,36 @@ class MLP(nn.Module):
         blocks.append(nn.Sigmoid())
         self.network = nn.Sequential(*blocks)
     
+        self.sigma = lambda x : torch.tanh(x)
+        self.dsigma = lambda x : 1 - torch.tanh(x)**2
+
     def forward(self, x):
         x = self.network(x)
         return x
+
+    def get_wb(self, depth):
+        return self.network[depth][0].weight, self.network[depth][0].bias
+        
+    def compute_ux(self, x):
+        W1, b1 = self.get_wb(0)
+        d1 = self.dsigma(x @ W1.T + b1)
+        a1 = self.sigma(x @ W1.T + b1)
+        
+        W2, b2 = self.get_wb(1)
+        d2 = self.dsigma(a1 @ W2.T + b2)
+        a2 = self.sigma(a1 @ W2.T + b2)
+        
+        W3, b3 = self.get_wb(2)
+        d3 = self.dsigma(a2 @ W3.T + b3)
+        a3 = self.sigma(a2 @ W3.T + b3)
+        
+        W4, b4 = self.get_wb(3)
+        d4 = self.dsigma(a3 @ W4.T + b4)
+        a4 = self.sigma(a3 @ W4.T + b4)
+        
+        z = ((((d4 @ W4 * d3) @ W3 * d2) @ W2) * d1) @ W1
+        
+        return z
 
 class DivFree(nn.Module):
 
