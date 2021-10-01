@@ -48,7 +48,7 @@ class SfunRFFNet(nn.Module):
     
     def __init__(self, name, dim_mpl_layers,
                 f_nfeatures, f_scale,
-                smallest_increment, n_centers):
+                smallest_increment, n_centers, n_increments):
         super(SfunRFFNet, self).__init__()
         self.name = name
         self.dummy_param = nn.Parameter(torch.empty(0))
@@ -64,7 +64,7 @@ class SfunRFFNet(nn.Module):
         self.min_l = smallest_increment
         self.n_centers = n_centers
         self.patch_dim = 32
-        self.n_increments = 5
+        self.n_increments = n_increments
         self.sfun = lambda x, y : torch.mean(torch.abs(x - y).pow(2))
         # self.sfun_model = 0.000275*smallest_increment*torch.arange(self.n_increments)**2
         self.sfun_model = 0.25*0.00275*torch.arange(self.n_increments)**2
