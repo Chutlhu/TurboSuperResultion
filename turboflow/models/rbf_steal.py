@@ -6,6 +6,26 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from turboflow.models.basics import LinearReLU, LinearTanh, Fourier
+
+class MLP(nn.Module):
+    
+    def __init__(self, dim_layers):
+        super(MLP, self).__init__()
+        layers = []
+        num_layers = len(dim_layers)
+        
+        blocks = []
+        for l in range(num_layers-2):
+            blocks.append(LinearReLU(dim_layers[l], dim_layers[l+1]))
+            
+        blocks.append(nn.Linear(dim_layers[-2], dim_layers[-1]))
+        blocks.append(nn.Tanh())
+        self.network = nn.Sequential(*blocks)
+    
+    def forward(self, x):
+        return self.network(x)
+
 class RBF(nn.Module):
     """
     Transforms incoming data using a given radial basis function:
@@ -55,21 +75,25 @@ def gaussian(alpha):
 
 class RBFNet(nn.Module):
     
-    def __init__(self, layer_widths, layer_centres, basis_func):
+    def __init__(self, name, dim_mpl_layers, f_nfeatures, f_scale):
         super(RBFNet, self).__init__()
-        self.rbf_layers = nn.ModuleList()
-        self.linear_layers = nn.ModuleList()
-        for i in range(len(layer_widths) - 1):
-            self.rbf_layers.append(RBF(layer_widths[i], layer_centres[i], basis_func))
-            self.linear_layers.append(nn.Linear(layer_centres[i], layer_widths[i+1]))
+        self.name = name
+        
+        # regression/pinn network       
+        self.rff = Fourier(f_nfeatures, f_scale) # directly the random matrix 'cause of checkpoint and load
+        self.mlp = MLP(dim_mpl_layers)
+        self.rbf = RBFNet()
+        
     
-    def forward(self, x):
-        out = x
-        for i in range(len(self.rbf_layers)):
-            out = self.rbf_layers[i](out)
-            out = self.linear_layers[i](out)
-        return out
-    
+    def forward(self, x): # x := BxC(Batch, InputChannels)
+        ## implement periodicity
+        x = torch.remainder(x,1)
+        ## Fourier features
+        x = self.rff(x) # Batch x Fourier Features
+        ## MLP
+        x = self.mlp(x)
+        return x
+
     def fit(self, trainloader, epochs=1000):
         self.train()
         optimiser = torch.optim.Adam(self.parameters(), lr=1e-4)

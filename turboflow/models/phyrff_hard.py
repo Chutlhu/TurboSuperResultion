@@ -2,40 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class Fourier(nn.Module):
+from turboflow.models.basics import LinearReLU, LinearTanh, Fourier
+
+
+class MLP(nn.Module):
     
-    def __init__(self, nfeat, scale):
-        super(Fourier, self).__init__()
-        self.b = nn.Parameter(torch.randn(2, nfeat)*scale, requires_grad=False)
-        self.pi = 3.14159265359
-
-    def forward(self, x):
-        x = 2*self.pi*x @ self.b.to(x.device)
-        return torch.cat([torch.sin(x), torch.cos(x)], -1)
-
-    
-def LinearReLU(n_in, n_out):
-    # do not work with ModuleList here either.
-    block = nn.Sequential(
-      nn.Linear(n_in, n_out),
-      nn.ReLU()
-    )
-    return block
-
-
-def LinearTanh(n_in, n_out):
-    # do not work with ModuleList here either.
-    block = nn.Sequential(
-      nn.Linear(n_in, n_out),
-      nn.Tanh()
-    )
-    return block
-
-
-class MLPauto(nn.Module):
-    
-    def __init__(self, dim_layers):
-        super(MLPauto, self).__init__()
+    def __init__(self, dim_layers, last_activation_fun):
+        super(MLP, self).__init__()
         layers = []
         num_layers = len(dim_layers)
         
@@ -44,7 +17,7 @@ class MLPauto(nn.Module):
             blocks.append(LinearTanh(dim_layers[l], dim_layers[l+1]))
             
         blocks.append(nn.Linear(dim_layers[-2], dim_layers[-1]))
-        blocks.append(nn.Sigmoid())
+        blocks.append(last_activation_fun)
         self.network = nn.Sequential(*blocks)
     
     def forward(self, x):
@@ -54,7 +27,7 @@ class MLPauto(nn.Module):
 class MLPhard(nn.Module):
     
     def __init__(self, dim_layers, nfeat, scale):
-        super(MLPhard, self).__init__()
+        super(MLPhard, self).__init__()# intermidiate
         num_layers = len(dim_layers)
         
         blocks = []
@@ -156,24 +129,36 @@ class DivFree(nn.Module):
 
 class DivFreeRFFNet(nn.Module):
     
-    def __init__(self, name, dim_mpl_layers, f_nfeatures, f_scale, lam_pde=1, 
-                    hardcoded_divfree=True):
+    def __init__(self, name, dim_mpl_layers,
+                    last_activation_fun,
+                    do_rff, f_nfeatures, f_scale, lam_pde=1, 
+                    hardcoded_divfree=False, verbose=True):
         super(DivFreeRFFNet, self).__init__()
         self.name = name
+        self.verbose = verbose
 
         assert dim_mpl_layers[-1] == 1
         
-        # regression/pinn network       
-        self.rff = Fourier(f_nfeatures, f_scale) # directly the random matrix 'cause of checkpoint and load
+        # regression/pinn network 
+        self.do_rff = do_rff
+        if do_rff:
+            self.rff = Fourier(f_nfeatures, f_scale) # directly the random matrix 'cause of checkpoint and load
+            dim_mpl_layers[0] = dim_mpl_layers[0]*f_nfeatures
+        else:
+            self.rff = None
 
         self.hardcoded_divfree = hardcoded_divfree
         if self.hardcoded_divfree:
             self.mlp = MLPhard(dim_mpl_layers, f_nfeatures, f_scale)
         else:
             self.rff = Fourier(f_nfeatures, f_scale)
-            self.mlp = MLPauto(dim_mpl_layers)
+            self.mlp = MLP(dim_mpl_layers, last_activation_fun)
         
         self.lam_pde = lam_pde
+
+        self.loss = []
+        self.loss_pde = []
+        self.loss_rec = []
         
     def forward(self, xin): # x := BxC(Batch, InputChannels)
         ## implement periodicity
@@ -185,14 +170,19 @@ class DivFreeRFFNet(nn.Module):
             du_dxy = self.mlp.compute_ux(xin)
         else:
             ## Fourier features
-            x = self.rff(xin) # Batch x Fourier Featuresi
-            ## MLP
-            x = self.mlp(x)
-            du_dxy = torch.autograd.grad(x, xin, torch.ones_like(x), create_graph=True)[0]       
+            if self.do_rff:
+                x = self.rff(xin) # Batch x Fourier Features
+                ## MLP
+                x = self.mlp(x)
+                du_dxy = torch.autograd.grad(x, xin, torch.ones_like(x), create_graph=True)[0]
+            else:
+                x = self.mlp(xin)
+                du_dxy = torch.autograd.grad(x, xin, torch.ones_like(x), create_graph=True)[0]
 
         div_free_uv = torch.cat([du_dxy[:,1,None], 
                                 -du_dxy[:,0,None]], dim=-1)
-        return div_free_uv
+        potential = x
+        return div_free_uv, potential
 
     def fit(self, trainloader, epochs=1000):
         self.train()
@@ -205,7 +195,7 @@ class DivFreeRFFNet(nn.Module):
             for x_batch, y_batch in trainloader:
                 batches += 1
                 optimiser.zero_grad()
-                y_hat = self.forward(x_batch)
+                y_hat, potential_hat = self.forward(x_batch)
 
                 # check div=0
                 u, v = torch.split(y_hat,1,-1)
@@ -219,10 +209,13 @@ class DivFreeRFFNet(nn.Module):
                 loss = loss_rec + self.lam_pde*loss_pde
                 current_loss +=  loss.item() - current_loss
 
+                self.loss_rec.append(loss_rec.item())
+                self.loss_pde.append(self.lam_pde*loss_pde.item())
+
                 loss.backward()
                 optimiser.step()
-                if epoch % 100 == 0:
-                    print('Epoch: %d, Loss: (rec: [%f] + %1.2f * div-free: [%f]) = %f' %
+                if self.verbose and (epoch % 100 == 0 or epoch == 1):
+                    print('Epoch: %4d, Loss: (rec: [%f] + %1.2f * div-free: [%f]) = %f' %
                      (epoch, loss_rec.item(), self.lam_pde, loss_pde.item(), current_loss))
 
         print('Done with Training')

@@ -24,6 +24,14 @@ def LinearReLU(n_in, n_out):
     )
     return block
 
+def LinearTanh(n_in, n_out):
+    # do not work with ModuleList here either.
+    block = nn.Sequential(
+      nn.Linear(n_in, n_out),
+      nn.Tanh()
+    )
+    return block
+
     
 class MLP(nn.Module):
     
@@ -34,7 +42,7 @@ class MLP(nn.Module):
         
         blocks = []
         for l in range(num_layers-2):
-            blocks.append(LinearReLU(dim_layers[l], dim_layers[l+1]))
+            blocks.append(LinearTanh(dim_layers[l], dim_layers[l+1]))
             
         blocks.append(nn.Linear(dim_layers[-2], dim_layers[-1]))
         blocks.append(nn.Tanh())
@@ -48,13 +56,13 @@ class SfunRFFNet(nn.Module):
     
     def __init__(self, name, dim_mpl_layers,
                 f_nfeatures, f_scale,
+                lam_pde, lam_sfun,
                 smallest_increment, n_centers, n_increments):
         super(SfunRFFNet, self).__init__()
         self.name = name
-        self.dummy_param = nn.Parameter(torch.empty(0))
 
         # pinn params
-        self.lam_pde = 1e-4
+        self.lam_pde = lam_pde # 1e-4
 
         # regression/pinn network       
         self.rff = Fourier(f_nfeatures, f_scale) # directly the random matrix 'cause of checkpoint and load
@@ -68,7 +76,7 @@ class SfunRFFNet(nn.Module):
         self.sfun = lambda x, y : torch.mean(torch.abs(x - y).pow(2))
         # self.sfun_model = 0.000275*smallest_increment*torch.arange(self.n_increments)**2
         self.sfun_model = 0.25*0.00275*torch.arange(self.n_increments)**2
-        self.lam_sfun = .01
+        self.lam_sfun = lam_sfun # 1e-3
 
     
     def forward(self, x): # x := BxC(Batch, InputChannels)
@@ -105,7 +113,7 @@ class SfunRFFNet(nn.Module):
                 # 1. FORWARD
                 y_hat = self.forward(x_batch)
 
-                # 2. LOSSes COMPUTATIN
+                # 2. LOSSes COMPUTATION
                 # 2.a reconstruction loss 
                 loss_rec = F.mse_loss(y_hat, y_batch)
                 # 2.b soft constraint loss
@@ -115,14 +123,13 @@ class SfunRFFNet(nn.Module):
                 div_u = du_x[...,0] + dv_y[...,1]
                 loss_pde = torch.norm(div_u)
                 # 2.c Sfun-based loss
-                patches_xcenter_xincrement = self.make_offgrid_patches_xcenter_xincrement()
-                x = patches_xcenter_xincrement
+                x = self.make_offgrid_patches_xcenter_xincrement()
                 I, C, P, P, D = x.shape
                 y_hat = self.forward(x.reshape(I*C*P*P,D)).reshape(I, C, P, P, D)
                 # compute structure function
                 Sfun2 = torch.mean((y_hat - y_hat[0,...])**2, dim=[1,2,3,4])
                 p = 1
-                loss_sfun = torch.sum(torch.abs(torch.log(Sfun2+1e-10) - torch.log(self.sfun_model+1e-10)**p))
+                loss_sfun = torch.sum(torch.abs(torch.log(Sfun2+1e-10) - torch.log(self.sfun_model+1e-10))**p)
                 # 2.d total loss
                 loss = loss_rec + self.lam_sfun*loss_sfun + self.lam_pde*loss_pde
                 current_loss += (1/batches) * (loss.item() - current_loss)
@@ -138,8 +145,8 @@ class SfunRFFNet(nn.Module):
                 progress += y_batch.size(0)
                 if epoch % 100 == 0:
                     print('Epoch: %d, Loss: (%f + %f + %f) = %f' % (epoch, loss_rec.item(), 
-                                                        self.lam_sfun*loss_sfun.item(),
                                                         self.lam_pde*loss_pde.item(),
+                                                        self.lam_sfun*loss_sfun.item(),
                                                         current_loss))
 
         print('Done with Training')
@@ -159,7 +166,7 @@ class SfunRFFNet(nn.Module):
         return next(self.parameters()).device
 
 
-    def make_offgrid_patches_xcenter(self):
+    def make_offgrid_patches_xcenter(self, n_centers = None):
         """
         for each random point in the image, make a square patch
         return: C x P x P x 2
@@ -167,7 +174,9 @@ class SfunRFFNet(nn.Module):
         device = self.get_device()
         
         # for earch 
-        centers = torch.randn(self.n_centers,2).to(device)
+        if n_centers is None:
+            n_centers = self.n_centers
+        centers = torch.randn(n_centers,2).to(device)
 
         ## make a patch
         # define one axis
@@ -176,7 +185,7 @@ class SfunRFFNet(nn.Module):
         patch_sq = torch.stack(torch.meshgrid(patch_ln, patch_ln), dim=-1)
         
         ## center the patch for all the centers
-        size = (self.n_centers, *patch_sq.shape)
+        size = (n_centers, *patch_sq.shape)
         patch_sq_xcenter = patch_sq.unsqueeze(0).expand(size)
         assert torch.allclose(patch_sq_xcenter[0,:,:], patch_sq)
         assert torch.allclose(patch_sq_xcenter[3,:,:], patch_sq)
@@ -184,7 +193,7 @@ class SfunRFFNet(nn.Module):
         # some checks
         assert len(patch_sq_xcenter.shape) == 4
         assert patch_sq_xcenter.shape[-1] == 2
-        assert patch_sq_xcenter.shape[0] == self.n_centers
+        assert patch_sq_xcenter.shape[0] == n_centers
         assert patch_sq_xcenter.shape[1] == patch_sq_xcenter.shape[2] == self.patch_dim*2
         return patch_sq_xcenter
 
