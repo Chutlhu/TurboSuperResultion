@@ -152,7 +152,6 @@ class SfunRFFNet(nn.Module):
         print('Done with Training')
         print('Final error:', current_loss)
 
-
     def forward_patches(self,device):
         x = self.make_offgrid_patches(device)
         assert x.shape[-1] == 2
@@ -164,7 +163,6 @@ class SfunRFFNet(nn.Module):
 
     def get_device(self):
         return next(self.parameters()).device
-
 
     def make_offgrid_patches_xcenter(self, n_centers = None):
         """
@@ -196,7 +194,6 @@ class SfunRFFNet(nn.Module):
         assert patch_sq_xcenter.shape[0] == n_centers
         assert patch_sq_xcenter.shape[1] == patch_sq_xcenter.shape[2] == self.patch_dim*2
         return patch_sq_xcenter
-
 
     def make_offgrid_patches_xcenter_xincrement(self):
         patches_xcenter = self.make_offgrid_patches_xcenter() # C x P x P x 2
