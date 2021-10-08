@@ -157,6 +157,8 @@ def plot_model_losses(res_dict, title=None):
     
     loss_rec = res_dict['loss']['rec']
     loss_pde = res_dict['loss']['pde']
+    loss_reg = res_dict['loss']['reg']
+    loss_sfn = res_dict['loss']['sfn']
     loss_tot = res_dict['loss']['tot']
     assert len(loss_pde) == len(loss_rec)
 
@@ -164,6 +166,8 @@ def plot_model_losses(res_dict, title=None):
 
     plt.plot(epochs, loss_rec, alpha=0.4, label=r'$\mathcal{L}_{rec}$')
     plt.plot(epochs, loss_pde, alpha=0.4, label=r'$\mathcal{L}_{pde}$')
+    plt.plot(epochs, loss_sfn, alpha=0.4, label=r'$\mathcal{L}_{sfn}$')
+    plt.plot(epochs, loss_reg, alpha=0.4, label=r'$\mathcal{L}_{reg}$')
     plt.plot(epochs, loss_tot, alpha=0.8, label=r'$\mathcal{L}_{tot}$')
     
     plt.yscale('log')
