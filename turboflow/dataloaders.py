@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import pytorch_lightning as pl
+from torch.utils import data
 
 from torch.utils.data import Dataset, DataLoader
 
@@ -29,16 +30,27 @@ class Turbo2DDataset(torch.utils.data.Dataset):
 
 
 class Turbo2DDataModule(pl.LightningDataModule):
-    def __init__(self, train_ds:int, val_ds:int, test_ds:int, img_idx:int=42, data_dir:str='../data/2021-Turb2D_velocities.npy', batch_size:int=None):
+    def __init__(self, args):
         
-        super().__init__()
+        super(Turbo2DDataModule, self).__init__()
 
-        self.data_dir = data_dir
-        self.batch_size = 100000 if batch_size is None else batch_size
-        self.img_idx = img_idx
-        self.train_ds = train_ds
-        self.val_ds = val_ds
-        self.test_ds = test_ds
+        self.data_dir = args.data_dir
+        self.batch_size = args.batch_size
+        self.img_idx = args.img_idx
+        self.train_ds = args.train_downsampling
+        self.val_ds = args.val_downsampling
+        self.test_ds = args.test_downsampling
+
+    @staticmethod
+    def add_data_specific_args(parent_parser):
+        group = parent_parser.add_argument_group("Turbo2D")
+        group.add_argument("--data_dir", type=str)
+        group.add_argument("--train_downsampling", type=int, default=4)
+        group.add_argument("--val_downsampling", type=int, default=4)
+        group.add_argument("--test_downsampling", type=int, default=1)
+        group.add_argument("--img_idx", type=int, default=42)
+        group.add_argument("--batch_size", type=int, default=100000)
+        return parent_parser
         
     def prepare_data(self):
         self.train_dataset = Turbo2DDataset(self.data_dir, self.train_ds, self.img_idx)

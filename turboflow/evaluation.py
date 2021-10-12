@@ -7,8 +7,6 @@ def metrics(u_true, u_pred):
 
     pass
 
-
-
 def results_potential_to_dict(Xlr, Xmr, Xhr, Ulr_gt, Umr_gt, Uhr_gt, model, device):
     ## predict velocity field
     xlr = tch.to_torch(Xlr, device)

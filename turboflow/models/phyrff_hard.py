@@ -10,7 +10,7 @@ from turboflow.utils import torch_utils as tch
 
 class MLP(nn.Module):
     
-    def __init__(self, dim_layers, last_activation_fun):
+    def __init__(self, dim_layers, last_activation_fun_name):
         super(MLP, self).__init__()
         layers = []
         num_layers = len(dim_layers)
@@ -20,11 +20,22 @@ class MLP(nn.Module):
             blocks.append(LinearTanh(dim_layers[l], dim_layers[l+1]))
             
         blocks.append(nn.Linear(dim_layers[-2], dim_layers[-1]))
-        blocks.append(last_activation_fun)
+        blocks.append(self.last_activation_function(last_activation_fun_name))
         self.network = nn.Sequential(*blocks)
     
     def forward(self, x):
         return self.network(x)
+
+    @staticmethod
+    def last_activation_function(fun_name:str)->nn.Module:
+        if fun_name == 'tanh':
+            return nn.Tanh()
+        if fun_name == 'sigmoid':
+            return nn.Sigmoid()
+        if fun_name == 'relu':
+            return nn.ReLU()
+        return None
+
 
     
 class MLPhard(nn.Module):
@@ -134,7 +145,7 @@ class DivFree(nn.Module):
 class DivFreeRFFNet(nn.Module):
     
     def __init__(self, name, 
-                    dim_mpl_layers, last_activation_fun,
+                    dim_mpl_layers, last_activation_fun_name,
                     do_rff, f_nfeatures, f_scale, 
                     smallest_increment, n_increments, n_centers,
                     lam_reg=1, lam_sfn=1, lam_pde=1,
@@ -155,7 +166,7 @@ class DivFreeRFFNet(nn.Module):
             self.rff = None
 
         self.rff = Fourier(f_nfeatures, f_scale)
-        self.mlp = MLP(dim_mpl_layers, last_activation_fun)
+        self.mlp = MLP(dim_mpl_layers, last_activation_fun_name)
         self.div = DivFree()
 
         # off-grid regularization params
@@ -320,55 +331,78 @@ class DivFreeRFFNet(nn.Module):
 
 class plDivFreeRFFNet(pl.LightningModule):
 
-    def __init__(self,
-                 name:str, 
-                 dim_mpl_layers:list, last_activation_fun:nn.Module,
-                 do_rff:bool, f_nfeatures:int, f_scale:float, 
-                 lam_pde:float, lam_reg:float, lam_sfn:float,
-                 smallest_increment:float, n_centers:int, n_increments:int, patch_dim:int = 32):
+    def __init__(self, hparams):
 
-        super().__init__()
+        # name:str='DivFreeRFFNet', mlp_layers:list=[2]+3*[256]+[1], 
+        #          last_activation_fun:nn.Module=nn.Tanh(),
+        #          do_rff:bool=True, fft_nfeat:int=256, fft_scale:float=10, 
+        #          lam_pde:float=1, lam_reg:float=1, lam_sfn:float=1,
+        #          smallest_increment:float=0.00784314, n_centers:int=5, n_increments:int=5, patch_dim:int = 32
 
-        self.name = name
+        super(plDivFreeRFFNet, self).__init__()
+
+        self.save_hyperparameters(hparams)
+
+        self.name = hparams.name
         self.automatic_optimization = True
 
-
-        assert dim_mpl_layers[-1] == 1 # DivFree predicts potential at the output of the MLP
-        
         # regression/pinn network 
-        self.do_rff = do_rff
-        if do_rff:
-            self.rff = Fourier(f_nfeatures, f_scale) # directly the random matrix 'cause of checkpoint and load
-            dim_mpl_layers[0] = dim_mpl_layers[0]*f_nfeatures
+        if hparams.do_rff:
+            self.rff = Fourier(hparams.rff_num, hparams.rff_scale) # directly the random matrix 'cause of checkpoint and load
+            mlp_layers_dim = [2*hparams.rff_num] + hparams.mlp_layers_num * [hparams.mlp_layers_dim] + [1]
         else:
             self.rff = None
+            mlp_layers_dim = [2]  + hparams.mlp_layers_num * [hparams.mlp_layers_dim] + [1]
 
-        self.mlp = MLP(dim_mpl_layers, last_activation_fun)
+        self.mlp = MLP(mlp_layers_dim, hparams.mlp_last_actfn)
         self.div = DivFree()
 
         # off-grid regularization params
-        self.min_l = smallest_increment
-        self.n_centers = n_centers
-        self.patch_dim = patch_dim
-        self.n_increments = n_increments
+        self.min_l = hparams.sfn_min_x
+        self.n_centers = hparams.sfn_num_centers
+        self.patch_dim = hparams.sfn_patch_dim
+        self.n_increments = hparams.sfn_num_increments
         self.sfun = lambda x, y : torch.mean(torch.abs(x - y).pow(2))
         self.sfun_model = 0.25*0.00275*torch.arange(self.n_increments)**2
         
         # PINN losses
-        self.lam_pde = lam_pde
-        self.lam_reg = lam_reg
-        self.lam_sfn = lam_sfn
+        self.lam_pde = hparams.lam_pde
+        self.lam_reg = hparams.lam_reg
+        self.lam_sfn = hparams.lam_sfn
         
-        # for loading from checkpoints
-        self.save_hyperparameters('name', 'dim_mpl_layers', 'f_nfeatures', 'f_scale', 'lam_pde')
-    
+        # reference image for logging on tensorboard
+        patch_ln = torch.linspace(0, 1, 64)
+        patch_sq = torch.stack(torch.meshgrid(patch_ln, patch_ln), dim=-1)
+        self.reference_input_lr = patch_sq.view(-1,2)
+        patch_ln = torch.linspace(0, 1, 256)
+        patch_sq = torch.stack(torch.meshgrid(patch_ln, patch_ln), dim=-1)
+        self.reference_input_hr = patch_sq.view(-1,2)
+
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        group = parent_parser.add_argument_group("DivFreeRFFNet")
+        group.add_argument("--name", type=str, default="DivFreeRFFNet")
+        group.add_argument("--mlp_layers_num", type=int, default=3)
+        group.add_argument("--mlp_layers_dim", type=int, default=256)
+        group.add_argument("--mlp_last_actfn", type=str, default="tanh")
+        group.add_argument("--do_rff", type=bool, default=True)
+        group.add_argument("--rff_num", type=int, default=256)
+        group.add_argument("--rff_scale", type=float, default=10)
+        group.add_argument("--lam_pde", type=float, default=0)
+        group.add_argument("--lam_reg", type=float, default=0)
+        group.add_argument("--lam_sfn", type=float, default=0)
+        group.add_argument("--sfn_min_x", type=float, default=0.00784314)
+        group.add_argument("--sfn_num_centers", type=float, default=30)
+        group.add_argument("--sfn_patch_dim", type=float, default=32)
+        group.add_argument("--sfn_num_increments", type=float, default=5)
+        return parent_parser
 
     def forward(self, xin): # x := BxC(Batch, InputChannels)
         xin.requires_grad_(True)
         ## implement periodicity
         x = torch.remainder(xin,1)
         ## Fourier features
-        if self.do_rff:
+        if self.hparams.do_rff:
             x = self.rff(x) # Batch x Fourier Features
         ## MLP
         Px = self.mlp(x)
@@ -376,7 +410,7 @@ class plDivFreeRFFNet(pl.LightningModule):
         u_df = self.div(Px, xin)
         return u_df, Px
 
-    def _common_step(self, batch, batch_idx, stage:str):
+    def _common_step(self, batch, batch_idx:int, stage:str):
         # It is independent of forward
         X_batch, y_batch = batch
 
@@ -385,6 +419,7 @@ class plDivFreeRFFNet(pl.LightningModule):
 
         ## REGULARIZATION and LOSSES
         # L2 regularization on Potential
+        loss_reg = 0
         if self.lam_reg > 0:
             loss_reg = torch.norm(Py_hat)**2
 
@@ -392,9 +427,9 @@ class plDivFreeRFFNet(pl.LightningModule):
         loss_sfn = 0
         if self.lam_sfn > 0:
             # 2.c Sfun-based loss
-            print(self.n_increments, self.n_centers, self.min_l, self.patch_dim, X_batch.device)
+            # print(self.n_increments, self.n_centers, self.min_l, self.patch_dim, X_batch.device)
             X_patches = make_offgrid_patches_xcenter_xincrement(
-                self.n_increments, self.n_centers, self.min_l, self.patch_dim, X_batch.device)
+                self.n_increments, self.n_centers, self.min_l, self.patch_dim, self.device)
             I, C, P, P, D = X_patches.shape
             y_patches_hat, _ = self.forward(X_patches.reshape(I*C*P*P,D))
             y_patches_hat = y_patches_hat.reshape(I, C, P, P, D)
@@ -418,11 +453,11 @@ class plDivFreeRFFNet(pl.LightningModule):
         loss = loss_rec + self.lam_pde*loss_pde + self.lam_reg*loss_reg + self.lam_sfn*loss_sfn
 
         # LOGs, PRINTs and PLOTs
-        self.log(f'Loss/{stage}/tot', loss, on_epoch=True)
-        self.log(f'Loss/{stage}/sfn', loss_sfn, on_epoch=True)
-        self.log(f'Loss/{stage}/rec', loss_rec, on_epoch=True)
-        self.log(f'Loss/{stage}/pde', loss_pde, on_epoch=True)
-        self.log(f'Loss/{stage}/reg', loss_reg, on_epoch=True)
+        self.log(f'{stage}_loss', loss, on_epoch=True)
+        self.log(f'{stage}_sfn', loss_sfn, on_epoch=True)
+        self.log(f'{stage}_rec', loss_rec, on_epoch=True)
+        self.log(f'{stage}_pde', loss_pde, on_epoch=True)
+        self.log(f'{stage}_reg', loss_reg, on_epoch=True)
 
         return loss
 
@@ -430,15 +465,78 @@ class plDivFreeRFFNet(pl.LightningModule):
         return self._common_step(batch, batch_idx, 'train')
     
     def validation_step(self, batch, batch_idx):
-        torch.set_grad_enabled(True)
+        torch.set_grad_enabled(True) # needed for divergenge
         return self._common_step(batch, batch_idx, 'val')
 
     def test_step(self, batch, batch_idx):
+        torch.set_grad_enabled(True) # needed for divergenge
         return self._common_step(batch, batch_idx, 'test')
+
+    #  add optional logic at the end of the training
+    #  the function is called after every epoch is completed
+    def training_epoch_end(self, outputs):
+        return None
+
+    def prediction_image_adder(self,x,u,Pu,R,res):
+        x = x.reshape(R,R,2)
+        u = u.reshape(R,R,2)
+        Pu = Pu.reshape(R,R)
+        self.logger.experiment.add_image(f"input/{res}/x", torch.Tensor.cpu(x[:,:,0]),
+                                         self.current_epoch,dataformats="HW")
+        self.logger.experiment.add_image(f"input/{res}/y", torch.Tensor.cpu(x[:,:,1]),
+                                         self.current_epoch,dataformats="HW")
+        self.logger.experiment.add_image(f"output/{res}/ux", torch.Tensor.cpu(u[:,:,0]),
+                                         self.current_epoch,dataformats="HW")
+        self.logger.experiment.add_image(f"output/{res}/uy", torch.Tensor.cpu(u[:,:,1]),
+                                         self.current_epoch,dataformats="HW")
+        self.logger.experiment.add_image(f"output/{res}/Pu", torch.Tensor.cpu(Pu),
+                                         self.current_epoch,dataformats="HW")
+
+
+    def custom_histogram_adder(self):
+        # iterating through all parameters
+        for name,params in self.named_parameters():
+            self.logger.experiment.add_histogram(name,params,self.current_epoch)
+
+    def validation_epoch_end(self, outputs):
+        # ## Save Model graph
+        # dummy_input = torch.rand((3,2))
+        # dummy_input.requires_grad_(True)
+        # self.logger.experiment.add_graph(plDivFreeRFFNet(self.hparams), dummy_input)
+        # 1/0
+
+        # LOG IMAGES
+        x_lr = self.reference_input_lr.clone().to(self.device)
+        u_lr, Pu_lr = self.forward(x_lr)
+        self.prediction_image_adder(x_lr, u_lr, Pu_lr, 64, 'lr')
+        x_hr = self.reference_input_hr.clone().to(self.device)
+        u_hr, Pu_hr = self.forward(x_hr)
+        self.prediction_image_adder(x_hr, u_hr, Pu_hr, 256, 'hr')
+
+        # self.custom_histogram_adder()
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+        # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, )
         return {"optimizer": optimizer, 
-                "lr_scheduler": scheduler,
-                "monitor": "valid_loss"}
+                # "lr_scheduler": scheduler,
+                "monitor": "val_loss"}
+
+    # def configure_optimizers(self):
+    #     optimizer = torch.optim.Adam(self.parameters(),
+    #                                  lr=self.hparams.lr,
+    #                                  weight_decay=self.hparams.l2_norm)
+
+    #     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+    #                                                               factor=lr_scheduler_factor,
+    #                                                               patience=lr_scheduler_patience,
+    #                                                               min_lr=lr_scheduler_min_lr,
+    #                                                               verbose=True)
+
+    #     scheduler = {
+    #         'scheduler': lr_scheduler,
+    #         'monitor': 'validation_loss',
+    #         'reduce_on_plateau': True
+    #     }
+
+    #     return [optimizer], [scheduler]
