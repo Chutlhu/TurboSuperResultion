@@ -1,11 +1,62 @@
+import glob
 import torch
 import numpy as np
-import pytorch_lightning as pl
-from torch.utils import data
 
+from natsort import natsorted
+
+import pytorch_lightning as pl
 from torch.utils.data import Dataset, DataLoader
 
-class Turbo2DDataset(torch.utils.data.Dataset):
+currently_supported_dataset = ['Turbo2D', 'Re39000']
+
+class Re39000Dataset(Dataset):
+
+    def __init__(self, data_dir:str, ds:int, img_idx:int, z=1):
+        super(Re39000Dataset, self).__init__()
+        
+        self.name = "Re39000"
+
+        self.img_idx = img_idx
+        # load raw data
+        files = natsorted(list(glob.glob(data_dir + "*.txt")))
+        file = files[img_idx]
+        data = np.loadtxt(file)
+
+        self.size = data.shape[0]
+
+        # hardcoded data processing
+        self.n_vars = 6 # x, y, z, u, v, w
+        self.nx = 308
+        self.ny = 328
+        self.nz = 3
+        data = data.reshape(self.nz, self.nx, self.ny, self.n_vars)
+        data = data.traspose(1,2,0,3)
+
+        # hardcoded data downsampling
+        #             x     y   z  vars
+        data = data[::ds, ::ds, z, :][:,:,None,:]
+        self.nx = data.shape[0]
+        self.ny = data.shape[1]
+        self.nz = data.shape[2]
+
+        self.order_x = "xyz"
+        self.order_y = "uvw"
+
+        self.X = torch.from_numpy(data[...,:3]).float().view(-1, 2) # x, y, z
+        self.y = torch.from_numpy(data[...,3:]).float().view(-1, 2) # u, v, w
+
+        assert self.X.shape == self.y.shape
+
+    def __len__(self):
+        return self.size
+    
+    def __getitem__(self, idx):
+        X = self.X[idx,:]
+        y = self.y[idx,:]
+        return X, y
+
+
+class Turbo2DDataset(Dataset):
     def __init__(self,path_to_turbo2D:str,ds:int,img:int):
 
         X, y = load_turbo2D_simple_numpy(path_to_turbo2D,ds,img) # low resolution (64x64)        
@@ -29,10 +80,20 @@ class Turbo2DDataset(torch.utils.data.Dataset):
         return X, y
 
 
-class Turbo2DDataModule(pl.LightningDataModule):
+class TurboFlowDataModule(pl.LightningDataModule):
     def __init__(self, args):
         
-        super(Turbo2DDataModule, self).__init__()
+        super(TurboFlowDataModule, self).__init__()
+
+        self.dataset = args.dataset
+        
+        if not self.dataset in currently_supported_dataset:
+            raise ValueError('Supported Dataset are {supported_dataset}, got: {self.dataset}')
+
+        if self.dataset == 'Turbo2D':
+            self.dataset_fn = Turbo2DDataset
+        if self.dataset == 'Re39000':
+            self.dataset_fn = Re39000Dataset
 
         self.data_dir = args.data_dir
         self.batch_size = args.batch_size
@@ -41,9 +102,12 @@ class Turbo2DDataModule(pl.LightningDataModule):
         self.val_ds = args.val_downsampling
         self.test_ds = args.test_downsampling
 
+        self.num_workers = 16
+
     @staticmethod
     def add_data_specific_args(parent_parser):
-        group = parent_parser.add_argument_group("Turbo2D")
+        group = parent_parser.add_argument_group("data")
+        group.add_argument("--dataset", type=str)
         group.add_argument("--data_dir", type=str)
         group.add_argument("--train_downsampling", type=int, default=4)
         group.add_argument("--val_downsampling", type=int, default=4)
@@ -53,18 +117,25 @@ class Turbo2DDataModule(pl.LightningDataModule):
         return parent_parser
         
     def prepare_data(self):
-        self.train_dataset = Turbo2DDataset(self.data_dir, self.train_ds, self.img_idx)
-        self.val_dataset   = Turbo2DDataset(self.data_dir, self.val_ds, self.img_idx)
-        self.test_dataset  = Turbo2DDataset(self.data_dir, self.test_ds, self.img_idx)
+        # if download is required
+        pass
+
+    def setup(self, stage):
+        if stage == "fit" or stage is None:
+            self.train_dataset = self.dataset_fn(self.data_dir, self.train_ds, self.img_idx)
+            self.val_dataset = self.train_dataset
+
+        if stage == "test" or stage is None:
+            self.test_dataset = self.dataset_fn(self.data_dir, self.test_ds, self.img_idx)
     
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, self.batch_size)
+        return DataLoader(self.train_dataset, self.batch_size, num_workers=self.num_workers)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, self.batch_size)
+        return DataLoader(self.val_dataset, self.batch_size, num_workers=self.num_workers)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, self.batch_size)
+        return DataLoader(self.test_dataset, self.batch_size, num_workers=self.num_workers)
 
 
 def load_turbo2D_simple_numpy(path_to_turbo2D:str='../data/2021-Turb2D_velocities.npy',ds:int=4,img:int=42):
@@ -87,44 +158,44 @@ def load_turbo2D_simple_numpy(path_to_turbo2D:str='../data/2021-Turb2D_velocitie
     return X, y
 
 
-class Turbo2D_simple(Dataset):
+# class Turbo2D_simple(Dataset):
     
-    def __init__(self, path_to_turbo2D, device, ds=4, img=42):
+#     def __init__(self, path_to_turbo2D, device, ds=4, img=42):
         
-        print('Dataset Turbo2D, img #', img)
+#         print('Dataset Turbo2D, img #', img)
 
-        IMGs = np.load(path_to_turbo2D)
-        X = IMGs[img,::ds,::ds,:2] / 255
-        U = IMGs[img,::ds,::ds,2:]
+#         IMGs = np.load(path_to_turbo2D)
+#         X = IMGs[img,::ds,::ds,:2] / 255
+#         U = IMGs[img,::ds,::ds,2:]
 
-        print(X.shape)
-        print(U.shape)
+#         print(X.shape)
+#         print(U.shape)
 
-        original_size = X.shape[0]
-        print('Original size', original_size)
+#         original_size = X.shape[0]
+#         print('Original size', original_size)
 
-        # normalize output
-        y = U.copy()
-        print('Y shape', y.shape)
-        print('Y min, max:', np.min(y), np.max(y))
-        y = y / np.max(np.abs(y))
+#         # normalize output
+#         y = U.copy()
+#         print('Y shape', y.shape)
+#         print('Y min, max:', np.min(y), np.max(y))
+#         y = y / np.max(np.abs(y))
         
-        print('after normalization, Y min, max:', np.min(y), np.max(y))
+#         print('after normalization, Y min, max:', np.min(y), np.max(y))
 
-        self.x = torch.from_numpy(X).float().to(device).view(-1,2)
-        self.y = torch.from_numpy(y).float().to(device).view(-1,2)
+#         self.x = torch.from_numpy(X).float().to(device).view(-1,2)
+#         self.y = torch.from_numpy(y).float().to(device).view(-1,2)
 
-        assert self.x.shape[0] == self.y.shape[0]
+#         assert self.x.shape[0] == self.y.shape[0]
 
     
-    def __len__(self):
-        return self.x.shape[0]
+#     def __len__(self):
+#         return self.x.shape[0]
     
 
-    def __getitem__(self, idx):
-        x = self.x[idx,:]
-        y = self.y[idx,:]
-        return (x, y)
+#     def __getitem__(self, idx):
+#         x = self.x[idx,:]
+#         y = self.y[idx,:]
+#         return (x, y)
 
 
 if __name__ == '__main__':
@@ -134,7 +205,6 @@ if __name__ == '__main__':
 
 
 # class Turbo2D_simple_with_neighbours(Dataset):
-    
 #     def __init__(self, path_to_turbo2D, device, ds=4, img=42):
         
 #         print('Dataset Turbo2D, img #', img)

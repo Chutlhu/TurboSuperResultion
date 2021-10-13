@@ -380,7 +380,7 @@ class plDivFreeRFFNet(pl.LightningModule):
 
     @staticmethod
     def add_model_specific_args(parent_parser):
-        group = parent_parser.add_argument_group("DivFreeRFFNet")
+        group = parent_parser.add_argument_group("model")
         group.add_argument("--name", type=str, default="DivFreeRFFNet")
         group.add_argument("--mlp_layers_num", type=int, default=3)
         group.add_argument("--mlp_layers_dim", type=int, default=256)

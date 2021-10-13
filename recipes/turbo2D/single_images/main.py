@@ -7,6 +7,7 @@ import numpy as np
 import torch
 # import pl torch libs
 import pytorch_lightning as pl
+from pytorch_lightning.trainer import Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 # Turboflow Libraries
@@ -35,6 +36,7 @@ def get_args():
 if __name__ == '__main__':
     
     hparams = get_args()
+    print(hparams)
 
     # PREPARE FOLDER
     root_dir = get_path_and_prepare_folder()
@@ -46,7 +48,8 @@ if __name__ == '__main__':
     model = plDivFreeRFFNet(hparams)
 
     early_stop_callback = EarlyStopping(monitor='val_loss')
-    trainer = pl.Trainer(gpus=1, 
+    trainer = Trainer(gpus=1, 
+                     fast_dev_run=hparams.fast_dev_run,
                      log_every_n_steps=1,
                      check_val_every_n_epoch=200, 
                      max_epochs=5000, 
@@ -54,5 +57,7 @@ if __name__ == '__main__':
 
     # TRAIN    
     trainer.fit(model, dm)
+    
     # TEST
-    # trainer.test()
+    if not hparams.fast_dev_run:
+        trainer.test()
