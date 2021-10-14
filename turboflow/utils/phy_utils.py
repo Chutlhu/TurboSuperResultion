@@ -1,17 +1,39 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-def compute_vorticity(U, V):
-    print('Warning *** CHECK THE GRADIENT DIRECTION')
-    dUx, dUy = np.gradient(U)
-    dVx, dVy = np.gradient(V)
-    return dVx - dUy
+
+def my_grad(f, sp, indexing = "xy"):
+    num_dims = len(f)
+    if indexing == "xy":
+        return [[np.gradient(f[num_dims - j - 1], sp[i], axis=i, edge_order=1) 
+                for i in range(num_dims)] for j in range(num_dims)]
+    if indexing == "ij":
+        return [[np.gradient(f[j], sp[i], axis=i, edge_order=1) 
+                for i in range(num_dims)] for j in range(num_dims)]
+
+# def compute_vorticity(u, v):
+#     dUx, dUy = np.gradient(u)
+#     dVx, dVy = np.gradient(v)
+#     return dVx - dUy
     
-def compute_divergence(U, V):
-    print('Warning *** CHECK THE GRADIENT DIRECTION')
-    dUx, dUy = np.gradient(U)
-    dVx, dVy = np.gradient(V)
-    return dUx + dVy
+# def compute_divergence(U, V):
+#     dUx, dUy = np.gradient(U)
+#     dVx, dVy = np.gradient(V)
+#     return dUx + dVy
+
+def compute_vorticity(xy:tuple, uv:tuple, indexing='ij'):
+    x = xy[0][:,0]
+    y = xy[1][0,:]
+    du_xy = my_grad([uv[0], uv[1]], [x, y], indexing=indexing)
+    return du_xy[1][0] - du_xy[0][1]
+
+def compute_divergence(xy:tuple, uv:tuple, indexing='ij'):
+    
+    x = xy[0][:,0]
+    y = xy[1][0,:]
+
+    du_xy = my_grad([uv[0], uv[1]], [x, y], indexing=indexing)
+    return du_xy[0][0] + du_xy[1][1]
 
 
 def compute_magnitude(U, V):
@@ -33,28 +55,6 @@ def divergence(f, sp, indexing = "xy"):
     if indexing == "ij":
         return np.ufunc.reduce(np.add, [np.gradient(f[i], sp[i], axis=i) for i in range(num_dims)])
 
-
-def plot_field(U, V, scale=5, step=20, img=None, ax=None):
-    """
-    Created on Tue Sep 15 13:22:23 2015​
-    @author: corpetti
-
-    affichage d'un champ de vecteurs
-    Input : u,v,scale,step,image (3 derniers optionnels)
-    """
-    if ax is None:
-        fig = plt.figure()
-        ax = fig.gca()
-
-    if img is None:
-        ax1 = ax.quiver(scale*np.flipud(U[::step,::step]),scale*np.flipud(-V[::step,::step]))
-        return ax1
-    else:
-        ny,nx = img.shape
-        X,Y = np.meshgrid(np.arange(0,nx,step), np.arange(0,ny,step))            
-        ax1 = ax.quiver(X,Y,U[::step,::step], -V[::step,::step], color='w')
-        ax2 = ax.imshow(img,cmap='gray')
-        return [ax1, ax2]
 
 def powerspec(data):
     # print ("shape of data = ",data.shape)

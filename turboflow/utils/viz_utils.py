@@ -4,6 +4,43 @@ from matplotlib import cm
 
 import turboflow.utils.phy_utils as phy
 
+###############################################################################
+##                                 SIMPLE PLOTS                              ##
+###############################################################################
+
+def plot_field(xy_img, uv_img, step=5, scale=20, vorticity_img=None, ax=None):
+    """
+    Created on Tue Sep 15 13:22:23 2015​
+    @author: corpetti
+
+    affichage d'un champ de vecteurs
+    Input : u,v,scale,step,image (3 derniers optionnels)
+    """
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.gca()
+    
+    s = step
+    color = np.sqrt((uv_img[0]**2) + (uv_img[1]**2))
+    if vorticity_img is None:
+        ax.quiver(
+                xy_img[0][::s,::s], xy_img[1][::s,::s], 
+                uv_img[0][::s,::s], uv_img[1][::s,::s], 
+                color[::s,::s], scale=scale)
+        return ax
+    else:
+        xmin, xmax = np.min(xy_img[0][::s,::s]), np.max(xy_img[0][::s,::s])
+        ymin, ymax = np.min(xy_img[1][::s,::s]), np.max(xy_img[1][::s,::s])
+        ax.imshow(vorticity_img,extent=[xmin, xmax, ymin, ymax], cmap='gray')
+        ax.quiver(
+                xy_img[0][::s,::s], xy_img[1][::s,::s], 
+                uv_img[0][::s,::s], uv_img[1][::s,::s], 
+                color[::s,::s], scale=scale)
+        return ax
+
+###############################################################################
+
+
 def plot_lr_hr_inset(ulr, uhr, L, H, title=None, add_extremes_in_title=False):
 
     ## Plot figures Resolution of Velocity Field
@@ -43,6 +80,7 @@ def plot_lr_hr_inset(ulr, uhr, L, H, title=None, add_extremes_in_title=False):
     fig.tight_layout()
 
     return fig
+
 
 def plot_velocity_field(xlr, ulr, L, xhr, uhr, H,
                         title=None,
