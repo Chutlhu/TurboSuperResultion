@@ -2,14 +2,42 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def my_grad(f, sp, indexing = "xy"):
+def my_grad(f:tuple, sp:tuple, indexing:str = "xy"):
+    """
+    my local computation of the gradient
+    
+    f: tuple 
+        -> vector field components [Fx,Fy,Fz,...]
+    sp: tuple 
+        -> spacing between points in respecitve directions [spx, spy,spz,...]
+        -> or 1N array for the coordinates [x,y,z,...]
+    indexing: str 
+        "xy" or "ij", see np.meshgrid indexing 
+    
+    Returns:
+        Components x Directions: grad[j][i] is the gradient of j-th component of F with respect direction i
+    """
     num_dims = len(f)
     if indexing == "xy":
-        return [[np.gradient(f[num_dims - j - 1], sp[i], axis=i, edge_order=1) 
-                for i in range(num_dims)] for j in range(num_dims)]
+        raise NotImplementedError
+        # return [[np.gradient(f[num_dims - j - 1], sp[i], axis=i, edge_order=1) 
+        #         for i in range(num_dims)] for j in range(num_dims)]
     if indexing == "ij":
         return [[np.gradient(f[j], sp[i], axis=i, edge_order=1) 
                 for i in range(num_dims)] for j in range(num_dims)]
+
+
+def compute_vorticity(xy:tuple, uv:tuple, indexing='ij'):
+    x = xy[0][:,0]
+    y = xy[1][0,:]
+    du_xy = my_grad([uv[0], uv[1]], [x, y], indexing=indexing)
+    return du_xy[1][0] - du_xy[0][1]
+
+def compute_divergence(xy:tuple, uv:tuple, indexing='ij'):
+    x = xy[0][:,0]
+    y = xy[1][0,:]
+    du_xy = my_grad([uv[0], uv[1]], [x, y], indexing=indexing)
+    return du_xy[0][0] + du_xy[1][1]
 
 # def compute_vorticity(u, v):
 #     dUx, dUy = np.gradient(u)
@@ -20,20 +48,6 @@ def my_grad(f, sp, indexing = "xy"):
 #     dUx, dUy = np.gradient(U)
 #     dVx, dVy = np.gradient(V)
 #     return dUx + dVy
-
-def compute_vorticity(xy:tuple, uv:tuple, indexing='ij'):
-    x = xy[0][:,0]
-    y = xy[1][0,:]
-    du_xy = my_grad([uv[0], uv[1]], [x, y], indexing=indexing)
-    return du_xy[1][0] - du_xy[0][1]
-
-def compute_divergence(xy:tuple, uv:tuple, indexing='ij'):
-    
-    x = xy[0][:,0]
-    y = xy[1][0,:]
-
-    du_xy = my_grad([uv[0], uv[1]], [x, y], indexing=indexing)
-    return du_xy[0][0] + du_xy[1][1]
 
 
 def compute_magnitude(U, V):

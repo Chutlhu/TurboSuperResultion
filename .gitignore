@@ -131,3 +131,7 @@ MNIST
 figures/
 pytorch_wavelets/
 torch_checkpoints/
+
+*.npz
+*.png
+*.pdf

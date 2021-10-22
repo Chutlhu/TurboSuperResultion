@@ -1,8 +1,6 @@
 import numpy as np
 from turboflow.utils import torch_utils as tch
 
-from turboflow.dataloaders import load_turbo2D_simple_numpy
-
 def metrics(u_true, u_pred):
 
     pass

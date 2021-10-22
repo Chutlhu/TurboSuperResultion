@@ -2,15 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+pi = 3.14159265359
+
 class Fourier(nn.Module):
     
     def __init__(self, nfeat, scale):
         super().__init__()
         self.b = nn.Parameter(torch.randn(2, nfeat)*scale, requires_grad=False)
-        self.pi = 3.14159265359
 
     def forward(self, x):
-        x = torch.einsum('bc,cf->bf', 2*self.pi*x, self.b.to(x.device))
+        x = torch.einsum('bc,cf->bf', 2*pi*x, self.b.to(x.device))
         return torch.cat([torch.sin(x), torch.cos(x)], -1)
 
     
@@ -83,3 +84,19 @@ def make_offgrid_patches_xcenter_xincrement(n_increments:int, n_centers:int, min
     assert patches_xcenter_xincrement.shape[1] == n_centers
     assert patches_xcenter_xincrement.shape[2] == patches_xcenter_xincrement.shape[3] == patch_dim*2
     return patches_xcenter_xincrement
+
+
+def montecarlo_sampling_xcenters_xincerments(n_points, n_increments, n_neighbours, min_l, device):
+    
+    random_points = torch.rand(n_points, 2, device=device).to(float)
+    random_direction = 2*torch.rand(n_neighbours, n_points, device=device).to(float) - 1
+    
+    traslated_points = torch.zeros(n_increments, n_neighbours, n_points, 2, device=device)
+    for l in range(n_increments):
+        traslated_points[l,:,:,0] = min_l*l*torch.cos(2*pi*random_direction) + random_points[None,:,0]
+        traslated_points[l,:,:,1] = min_l*l*torch.sin(2*pi*random_direction) + random_points[None,:,1]
+
+    return traslated_points
+
+
+    

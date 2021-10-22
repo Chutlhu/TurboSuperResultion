@@ -3,23 +3,26 @@ import torch
 import numpy as np
 
 from natsort import natsorted
+from torch.utils import data
+
+from turboflow.datasets.turb2D import Turb2D
 
 import pytorch_lightning as pl
 from torch.utils.data import Dataset, DataLoader
 
-currently_supported_dataset = ['Turbo2D', 'Re39000']
+currently_supported_dataset = ['Turb2D', 'Re39000']
 
 class Re39000Dataset(Dataset):
 
-    def __init__(self, data_dir:str, ds:int, img_idx:int, z=1):
+    def __init__(self, data_dir:str, ds:int, time_idx:int, z=1):
         super(Re39000Dataset, self).__init__()
         
         self.name = "Re39000"
 
-        self.img_idx = img_idx
+        self.time_idx = time_idx
         # load raw data
         files = natsorted(list(glob.glob(data_dir + "*.txt")))
-        file = files[img_idx]
+        file = files[time_idx]
         data = np.loadtxt(file)
 
         self.size = data.shape[0]
@@ -56,18 +59,33 @@ class Re39000Dataset(Dataset):
         return X, y
 
 
-class Turbo2DDataset(Dataset):
-    def __init__(self,path_to_turbo2D:str,ds:int,img:int):
+class Turb2DDataset(Dataset):
+    def __init__(self,data_dir:str=None,ds:int=1,time_idx:int=None):
 
-        X, y = load_turbo2D_simple_numpy(path_to_turbo2D,ds,img) # low resolution (64x64)        
+        tb = Turb2D(data_dir)
+        tb.setup()
+        tb.load_data(time_idx)
+
+        X = tb.xy
+        y = tb.uv
+
+        # normalize y
+        y = y/np.max(np.abs(y))
+        assert np.min(y) >= -1
+        assert np.max(y) <=  1
         
         assert X.shape[0] == y.shape[0]
 
-        self.resolution = int(np.sqrt(X.shape[0]))
-        self.size = X.shape[0]
+        # downsampling
+        X = X[::ds, ::ds, :]
+        y = y[::ds, ::ds, :]
+
+        self.img_shape = X.shape[:2]
+        self.res = int(np.sqrt(X.shape[0]))
 
         self.X = torch.from_numpy(X).float().view(-1,2)
         self.y = torch.from_numpy(y).float().view(-1,2)
+        self.size = self.X.shape[0]
 
         assert self.X.shape == self.y.shape
                 
@@ -81,52 +99,53 @@ class Turbo2DDataset(Dataset):
 
 
 class TurboFlowDataModule(pl.LightningDataModule):
-    def __init__(self, args):
-        
+    def __init__(self, dataset:str, data_dir:str, batch_size:int, time_idx:int,
+                 train_downsampling:int, val_downsampling:int, test_downsampling:int,
+                 num_workers:int):
         super(TurboFlowDataModule, self).__init__()
 
-        self.dataset = args.dataset
-        
-        if not self.dataset in currently_supported_dataset:
-            raise ValueError('Supported Dataset are {supported_dataset}, got: {self.dataset}')
+        self.dataset = dataset
 
-        if self.dataset == 'Turbo2D':
-            self.dataset_fn = Turbo2DDataset
+        if not self.dataset in currently_supported_dataset:
+            raise ValueError(f'Supported Dataset are {currently_supported_dataset}, got: {dataset}')
+
+        if self.dataset == 'Turb2D':
+            self.dataset_fn = Turb2DDataset
         if self.dataset == 'Re39000':
             self.dataset_fn = Re39000Dataset
 
-        self.data_dir = args.data_dir
-        self.batch_size = args.batch_size
-        self.img_idx = args.img_idx
-        self.train_ds = args.train_downsampling
-        self.val_ds = args.val_downsampling
-        self.test_ds = args.test_downsampling
-
-        self.num_workers = 16
+        self.data_dir = data_dir
+        self.batch_size = batch_size
+        self.time_idx = time_idx
+        self.train_ds = train_downsampling
+        self.val_ds = val_downsampling
+        self.test_ds = test_downsampling
+        self.num_workers = num_workers
 
     @staticmethod
     def add_data_specific_args(parent_parser):
         group = parent_parser.add_argument_group("data")
-        group.add_argument("--dataset", type=str)
-        group.add_argument("--data_dir", type=str)
+        group.add_argument("--dataset", type=str, required=True)
+        group.add_argument("--data_dir", type=str, required=True)
         group.add_argument("--train_downsampling", type=int, default=4)
         group.add_argument("--val_downsampling", type=int, default=4)
         group.add_argument("--test_downsampling", type=int, default=1)
-        group.add_argument("--img_idx", type=int, default=42)
+        group.add_argument("--time_idx", type=int, default=42)
         group.add_argument("--batch_size", type=int, default=100000)
+        group.add_argument("--num_workers", type=int, default=1)
         return parent_parser
         
     def prepare_data(self):
         # if download is required
         pass
 
-    def setup(self, stage):
+    def setup(self, stage=None):
         if stage == "fit" or stage is None:
-            self.train_dataset = self.dataset_fn(self.data_dir, self.train_ds, self.img_idx)
+            self.train_dataset = self.dataset_fn(self.data_dir, self.train_ds, self.time_idx)
             self.val_dataset = self.train_dataset
 
         if stage == "test" or stage is None:
-            self.test_dataset = self.dataset_fn(self.data_dir, self.test_ds, self.img_idx)
+            self.test_dataset = self.dataset_fn(self.data_dir, self.test_ds, self.time_idx)
     
     def train_dataloader(self):
         return DataLoader(self.train_dataset, self.batch_size, num_workers=self.num_workers)
@@ -138,9 +157,9 @@ class TurboFlowDataModule(pl.LightningDataModule):
         return DataLoader(self.test_dataset, self.batch_size, num_workers=self.num_workers)
 
 
-def load_turbo2D_simple_numpy(path_to_turbo2D:str='../data/2021-Turb2D_velocities.npy',ds:int=4,img:int=42):
+def load_turb2D_simple_numpy(path_to_turb2D:str='../data/2021-Turb2D_velocities.npy',ds:int=4,img:int=42):
 
-    IMGs = np.load(path_to_turbo2D)
+    IMGs = np.load(path_to_turb2D)
     X = IMGs[img,::ds,::ds,:2] / 255
     y = IMGs[img,::ds,::ds,2:]
 
@@ -158,13 +177,13 @@ def load_turbo2D_simple_numpy(path_to_turbo2D:str='../data/2021-Turb2D_velocitie
     return X, y
 
 
-# class Turbo2D_simple(Dataset):
+# class Turb2D_simple(Dataset):
     
-#     def __init__(self, path_to_turbo2D, device, ds=4, img=42):
+#     def __init__(self, path_to_turb2D, device, ds=4, img=42):
         
-#         print('Dataset Turbo2D, img #', img)
+#         print('Dataset Turb2D, img #', img)
 
-#         IMGs = np.load(path_to_turbo2D)
+#         IMGs = np.load(path_to_turb2D)
 #         X = IMGs[img,::ds,::ds,:2] / 255
 #         U = IMGs[img,::ds,::ds,2:]
 
@@ -204,12 +223,12 @@ if __name__ == '__main__':
 
 
 
-# class Turbo2D_simple_with_neighbours(Dataset):
-#     def __init__(self, path_to_turbo2D, device, ds=4, img=42):
+# class Turb2D_simple_with_neighbours(Dataset):
+#     def __init__(self, path_to_turb2D, device, ds=4, img=42):
         
-#         print('Dataset Turbo2D, img #', img)
+#         print('Dataset Turb2D, img #', img)
 
-#         IMGs = np.load(path_to_turbo2D)
+#         IMGs = np.load(path_to_turb2D)
 #         X = IMGs[img,::ds,::ds,:2] / 255
 #         U = IMGs[img,::ds,::ds,2:]
 

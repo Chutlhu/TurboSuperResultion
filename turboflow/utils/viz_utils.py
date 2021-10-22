@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
+import matplotlib.animation as animation
+from numpy.core.fromnumeric import repeat
 
 import turboflow.utils.phy_utils as phy
 
@@ -8,7 +10,7 @@ import turboflow.utils.phy_utils as phy
 ##                                 SIMPLE PLOTS                              ##
 ###############################################################################
 
-def plot_field(xy_img, uv_img, step=5, scale=20, vorticity_img=None, ax=None):
+def plot_field(xy_img, uv_img, step=5, scale=20, vorticity_img=None, ax=None, indexing='ij'):
     """
     Created on Tue Sep 15 13:22:23 2015​
     @author: corpetti
@@ -16,27 +18,71 @@ def plot_field(xy_img, uv_img, step=5, scale=20, vorticity_img=None, ax=None):
     affichage d'un champ de vecteurs
     Input : u,v,scale,step,image (3 derniers optionnels)
     """
+
     if ax is None:
         fig = plt.figure()
         ax = fig.gca()
     
     s = step
-    color = np.sqrt((uv_img[0]**2) + (uv_img[1]**2))
-    if vorticity_img is None:
-        ax.quiver(
-                xy_img[0][::s,::s], xy_img[1][::s,::s], 
-                uv_img[0][::s,::s], uv_img[1][::s,::s], 
-                color[::s,::s], scale=scale)
-        return ax
-    else:
+
+    if indexing == 'xy':
+        raise NotImplementedError
+
+    if not vorticity_img is None:
+        w = np.zeros_like(vorticity_img)
+        for i in range(w.shape[0]):
+            for j in range(w.shape[1]):
+                w[i,j] = vorticity_img[j, -i]
+
         xmin, xmax = np.min(xy_img[0][::s,::s]), np.max(xy_img[0][::s,::s])
         ymin, ymax = np.min(xy_img[1][::s,::s]), np.max(xy_img[1][::s,::s])
-        ax.imshow(vorticity_img,extent=[xmin, xmax, ymin, ymax], cmap='gray')
-        ax.quiver(
-                xy_img[0][::s,::s], xy_img[1][::s,::s], 
-                uv_img[0][::s,::s], uv_img[1][::s,::s], 
-                color[::s,::s], scale=scale)
-        return ax
+        ax.imshow(w,
+                    extent=[xmin, xmax, ymin, ymax], 
+                    origin=None, cmap='gray')
+    
+    color = np.sqrt((uv_img[0]**2) + (uv_img[1]**2))
+    ax.quiver(
+            xy_img[0][::s,::s],
+            xy_img[1][::s,::s], 
+            uv_img[0][::s,::s],
+            uv_img[1][::s,::s], 
+            # color = 'w',
+            color[::s,::s], 
+            scale=scale)
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+
+    return ax
+
+def animate_field(xy_img_t, uv_img_t, step=5, scale=20, indexing='ij'):
+    
+    assert len(xy_img_t) == len(uv_img_t) == 2
+    assert xy_img_t[0].shape == xy_img_t[1].shape
+    assert uv_img_t[0].shape == uv_img_t[1].shape
+    assert xy_img_t[0].shape == uv_img_t[0].shape
+
+    T = xy_img_t[0].shape[0]
+
+    fig, ax = plt.subplots(figsize=(10,10))
+    ims = []
+
+    for t in range(T):
+
+        xx = xy_img_t[0][t,...]
+        yy = xy_img_t[1][t,...]
+        uu = uv_img_t[0][t,...]
+        vv = uv_img_t[1][t,...]
+
+        w = phy.compute_vorticity((xx, yy), (uu, vv))
+
+        im = plot_field((xx, yy), (uu, vv), w, step = step, scale=scale, ax=ax)
+
+        ims.append([im])
+
+    ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
+    plt.close()
+
+    return
 
 ###############################################################################
 

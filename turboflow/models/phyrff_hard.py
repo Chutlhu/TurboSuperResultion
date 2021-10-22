@@ -6,6 +6,9 @@ import pytorch_lightning as pl
 
 from turboflow.models.basics import *
 from turboflow.utils import torch_utils as tch
+from turboflow.utils import file_utils as fle
+
+import matplotlib.pyplot as plt
 
 
 class MLP(nn.Module):
@@ -201,7 +204,7 @@ class DivFreeRFFNet(nn.Module):
         u_df = self.div(Px, xin)
         return u_df, Px
 
-    def fit(self, trainloader, epochs=1000):
+    def fit(self, dataloader, epochs=1000):
         self.train()
         optimiser = torch.optim.Adam(self.parameters(), lr=1e-4)
         epoch = 0
@@ -218,7 +221,10 @@ class DivFreeRFFNet(nn.Module):
             loss_pde = torch.zeros(1).to(device)
             loss_reg = torch.zeros(1).to(device)
 
-            for x_batch, y_batch in trainloader:
+            for x_batch, y_batch in dataloader:
+
+                x_batch = x_batch.to(device)
+                y_batch = y_batch.to(device)
 
                 batches += 1
                 optimiser.zero_grad()
@@ -268,7 +274,7 @@ class DivFreeRFFNet(nn.Module):
                 self.loss_reg.append(self.lam_reg*loss_reg.item())
                 self.loss_sfn.append(self.lam_sfn*loss_sfn.item())
 
-                if self.verbose and (epoch % 100 == 0):
+                if self.verbose and (epoch % 100 == 0 or epoch==1):
                     print('Epoch: %4d, Loss: (rec: [%1.4f] + df: [%1.4f] + regL2: [%1.4f] + regSfun: [%1.4f]) = %f' %
                      (epoch,
                         loss_rec.item(), 
@@ -331,44 +337,48 @@ class DivFreeRFFNet(nn.Module):
 
 class plDivFreeRFFNet(pl.LightningModule):
 
-    def __init__(self, hparams):
-
-        # name:str='DivFreeRFFNet', mlp_layers:list=[2]+3*[256]+[1], 
-        #          last_activation_fun:nn.Module=nn.Tanh(),
-        #          do_rff:bool=True, fft_nfeat:int=256, fft_scale:float=10, 
-        #          lam_pde:float=1, lam_reg:float=1, lam_sfn:float=1,
-        #          smallest_increment:float=0.00784314, n_centers:int=5, n_increments:int=5, patch_dim:int = 32
+    def __init__(self,  name:str, mlp_layers_num:int, mlp_layers_dim:int, 
+                        mlp_last_actfn:nn.Module,
+                        do_rff:bool, rff_num:int, rff_scale:float,
+                        do_divfree:bool,
+                        lam_pde:float, lam_reg:float, lam_sfn:float,
+                        sfn_min_x:float, sfn_num_centers:int, sfn_num_increments:int, sfn_patch_dim:int):
 
         super(plDivFreeRFFNet, self).__init__()
 
-        self.save_hyperparameters(hparams)
+        self.save_hyperparameters()
 
-        self.name = hparams.name
+        self.name = name
         self.automatic_optimization = True
 
         # regression/pinn network 
-        if hparams.do_rff:
-            self.rff = Fourier(hparams.rff_num, hparams.rff_scale) # directly the random matrix 'cause of checkpoint and load
-            mlp_layers_dim = [2*hparams.rff_num] + hparams.mlp_layers_num * [hparams.mlp_layers_dim] + [1]
+        if do_rff:
+            self.rff = Fourier(rff_num, rff_scale) # directly the random matrix 'cause of checkpoint and load
+            mlp_layers_dim = [2*rff_num] + mlp_layers_num * [mlp_layers_dim] + [1]
         else:
             self.rff = None
-            mlp_layers_dim = [2]  + hparams.mlp_layers_num * [hparams.mlp_layers_dim] + [1]
+            mlp_layers_dim = [2]  + mlp_layers_num * [mlp_layers_dim] + [1]
 
-        self.mlp = MLP(mlp_layers_dim, hparams.mlp_last_actfn)
-        self.div = DivFree()
+        self.do_divfree = do_divfree
+        if do_divfree:
+            self.mlp = MLP(mlp_layers_dim, mlp_last_actfn)
+            self.div = DivFree()
+        else:
+            mlp_layers_dim[-1] = 2
+            self.mlp = MLP(mlp_layers_dim, mlp_last_actfn)
 
         # off-grid regularization params
-        self.min_l = hparams.sfn_min_x
-        self.n_centers = hparams.sfn_num_centers
-        self.patch_dim = hparams.sfn_patch_dim
-        self.n_increments = hparams.sfn_num_increments
+        self.min_l = sfn_min_x
+        self.n_centers = sfn_num_centers
+        self.patch_dim = sfn_patch_dim
+        self.n_increments = sfn_num_increments
         self.sfun = lambda x, y : torch.mean(torch.abs(x - y).pow(2))
         self.sfun_model = 0.25*0.00275*torch.arange(self.n_increments)**2
         
         # PINN losses
-        self.lam_pde = hparams.lam_pde
-        self.lam_reg = hparams.lam_reg
-        self.lam_sfn = hparams.lam_sfn
+        self.lam_pde = lam_pde
+        self.lam_reg = lam_reg
+        self.lam_sfn = lam_sfn
         
         # reference image for logging on tensorboard
         patch_ln = torch.linspace(0, 1, 64)
@@ -385,16 +395,17 @@ class plDivFreeRFFNet(pl.LightningModule):
         group.add_argument("--mlp_layers_num", type=int, default=3)
         group.add_argument("--mlp_layers_dim", type=int, default=256)
         group.add_argument("--mlp_last_actfn", type=str, default="tanh")
-        group.add_argument("--do_rff", type=bool, default=True)
+        group.add_argument("--do_rff",     type=fle.str2bool, nargs='?', const=True, default=False)
+        group.add_argument("--do_divfree", type=fle.str2bool, nargs='?', const=True, default=False)
         group.add_argument("--rff_num", type=int, default=256)
         group.add_argument("--rff_scale", type=float, default=10)
         group.add_argument("--lam_pde", type=float, default=0)
         group.add_argument("--lam_reg", type=float, default=0)
         group.add_argument("--lam_sfn", type=float, default=0)
         group.add_argument("--sfn_min_x", type=float, default=0.00784314)
-        group.add_argument("--sfn_num_centers", type=float, default=30)
-        group.add_argument("--sfn_patch_dim", type=float, default=32)
-        group.add_argument("--sfn_num_increments", type=float, default=5)
+        group.add_argument("--sfn_num_centers", type=int, default=5)
+        group.add_argument("--sfn_patch_dim", type=int, default=32)
+        group.add_argument("--sfn_num_increments", type=int, default=5)
         return parent_parser
 
     def forward(self, xin): # x := BxC(Batch, InputChannels)
@@ -404,38 +415,55 @@ class plDivFreeRFFNet(pl.LightningModule):
         ## Fourier features
         if self.hparams.do_rff:
             x = self.rff(x) # Batch x Fourier Features
+        
         ## MLP
-        Px = self.mlp(x)
-        ## DivFree
-        u_df = self.div(Px, xin)
-        return u_df, Px
+        if self.hparams.do_divfree:
+            Px = self.mlp(x)
+            ## DivFree
+            u_df = self.div(Px, xin)
+            return u_df, Px
+        else:
+            return self.mlp(x), None
 
     def _common_step(self, batch, batch_idx:int, stage:str):
         # It is independent of forward
         X_batch, y_batch = batch
 
-        ## FORWARD
+        # ## FORWARD
         y_hat, Py_hat = self.forward(X_batch)
 
         ## REGULARIZATION and LOSSES
-        # L2 regularization on Potential
+        # L2 regularization on the gradient of the potential
         loss_reg = 0
         if self.lam_reg > 0:
-            loss_reg = torch.norm(Py_hat)**2
+            dP_xy = torch.autograd.grad(Py_hat, X_batch, torch.ones_like(Py_hat), create_graph=True)[0]       
+            loss_reg = torch.norm(dP_xy[:,0] + dP_xy[:,1])**2
 
         # Sfun regularization
         loss_sfn = 0
         if self.lam_sfn > 0:
             # 2.c Sfun-based loss
-            # print(self.n_increments, self.n_centers, self.min_l, self.patch_dim, X_batch.device)
-            X_patches = make_offgrid_patches_xcenter_xincrement(
-                self.n_increments, self.n_centers, self.min_l, self.patch_dim, self.device)
-            I, C, P, P, D = X_patches.shape
-            y_patches_hat, _ = self.forward(X_patches.reshape(I*C*P*P,D))
-            y_patches_hat = y_patches_hat.reshape(I, C, P, P, D)
+            # X_patches = make_offgrid_patches_xcenter_xincrement(
+            #     self.n_increments, self.n_centers, self.min_l, self.patch_dim, self.device)
+            # I, C, P, P, D = X_patches.shape
+            # y_patches_hat, _ = self.forward(X_patches.reshape(I*C*P*P,D))
+            # y_patches_hat = y_patches_hat.reshape(I, C, P, P, D)
+            X_random = montecarlo_sampling_xcenters_xincerments(
+                self.n_centers, self.n_increments, self.patch_dim, self.min_l, self.device)
+            shape = X_random.shape # I x C x P x D
+
+            y_random_hat, _ = self.forward(X_random.view(-1,2))
+            y_random_hat = y_random_hat.reshape(shape)
+
             # compute structure function
-            Sfun2 = torch.mean((y_patches_hat - y_patches_hat[0,...])**2, dim=[1,2,3,4])
-            loss_sfn = torch.sum(torch.abs(torch.log(Sfun2+1e-10) - torch.log(self.sfun_model.to(X_batch.device)+1e-10))**1)
+            Sfun2 = torch.mean((y_random_hat - y_random_hat[0,...])**2, dim=[3,1,2])
+            loss_sfn = torch.sum(torch.abs(torch.log(Sfun2+1e-10) - torch.log(self.sfun_model.to(X_batch.device)+1e-10))**2)
+
+            if self.current_epoch % 100 == 0:
+                plt.loglog(Sfun2.detach().cpu().numpy())
+                plt.loglog(self.sfun_model.detach().cpu().numpy())
+                plt.savefig(f'./sfun_epoch-{self.current_epoch}.png')
+                plt.close()
 
         # DivFree regularization
         loss_pde = 0
@@ -443,15 +471,14 @@ class plDivFreeRFFNet(pl.LightningModule):
             u, v = torch.split(y_hat,1,-1)
             du_xy = torch.autograd.grad(u, X_batch, torch.ones_like(u), create_graph=True)[0]       
             dv_xy = torch.autograd.grad(v, X_batch, torch.ones_like(v), create_graph=True)[0]
-            div_u_xy = du_xy[...,0] + dv_xy[...,1]
-            loss_pde = torch.norm(div_u_xy)**2
+            loss_pde = torch.norm(du_xy[...,0] + dv_xy[...,1])**2
     
-        # Reconstruction loss
+        # # Reconstruction loss
         loss_rec = F.mse_loss(y_hat, y_batch)
 
-        # Total loss
+        # # Total loss
         loss = loss_rec + self.lam_pde*loss_pde + self.lam_reg*loss_reg + self.lam_sfn*loss_sfn
-
+        
         # LOGs, PRINTs and PLOTs
         self.log(f'{stage}_loss', loss, on_epoch=True)
         self.log(f'{stage}_sfn', loss_sfn, on_epoch=True)
@@ -492,7 +519,6 @@ class plDivFreeRFFNet(pl.LightningModule):
         self.logger.experiment.add_image(f"output/{res}/Pu", torch.Tensor.cpu(Pu),
                                          self.current_epoch,dataformats="HW")
 
-
     def custom_histogram_adder(self):
         # iterating through all parameters
         for name,params in self.named_parameters():
@@ -506,14 +532,15 @@ class plDivFreeRFFNet(pl.LightningModule):
         # 1/0
 
         # LOG IMAGES
-        x_lr = self.reference_input_lr.clone().to(self.device)
-        u_lr, Pu_lr = self.forward(x_lr)
-        self.prediction_image_adder(x_lr, u_lr, Pu_lr, 64, 'lr')
-        x_hr = self.reference_input_hr.clone().to(self.device)
-        u_hr, Pu_hr = self.forward(x_hr)
-        self.prediction_image_adder(x_hr, u_hr, Pu_hr, 256, 'hr')
-
+        # x_lr = self.reference_input_lr.clone().to(self.device)
+        # u_lr, Pu_lr = self.forward(x_lr)
+        # self.prediction_image_adder(x_lr, u_lr, Pu_lr, 64, 'lr')
+        # x_hr = self.reference_input_hr.clone().to(self.device)
+        # u_hr, Pu_hr = self.forward(x_hr)
+        # self.prediction_image_adder(x_hr, u_hr, Pu_hr, 256, 'hr')
+        
         # self.custom_histogram_adder()
+        pass
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
@@ -521,22 +548,3 @@ class plDivFreeRFFNet(pl.LightningModule):
         return {"optimizer": optimizer, 
                 # "lr_scheduler": scheduler,
                 "monitor": "val_loss"}
-
-    # def configure_optimizers(self):
-    #     optimizer = torch.optim.Adam(self.parameters(),
-    #                                  lr=self.hparams.lr,
-    #                                  weight_decay=self.hparams.l2_norm)
-
-    #     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-    #                                                               factor=lr_scheduler_factor,
-    #                                                               patience=lr_scheduler_patience,
-    #                                                               min_lr=lr_scheduler_min_lr,
-    #                                                               verbose=True)
-
-    #     scheduler = {
-    #         'scheduler': lr_scheduler,
-    #         'monitor': 'validation_loss',
-    #         'reduce_on_plateau': True
-    #     }
-
-    #     return [optimizer], [scheduler]

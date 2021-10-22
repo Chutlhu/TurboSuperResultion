@@ -6,10 +6,13 @@ do_dvf=true
 
 rff_num=256
 python main.py  --dataset Turb2D --data_dir $data_dir   \
-                --num_workers 2                         \
+                --num_workers 1                         \
                 --do_rff $do_rff --rff_num $rff_num     \
                 --do_divfree $do_dvf                    \
-                --lam_reg 1e-3                          \
+                --lam_sfn 1e-3                          \
+                --sfn_num_centers 50                     \
+                --sfn_num_increments 3                  \
+                --sfn_patch_dim   30                     \
                 --gpu 1 --max_epoch 5000                \
                 --log_every_n_steps 1 --check_val_every_n_epoch 200
 
