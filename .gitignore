@@ -135,3 +135,5 @@ torch_checkpoints/
 *.npz
 *.png
 *.pdf
+*.pkl
+*.ckpt

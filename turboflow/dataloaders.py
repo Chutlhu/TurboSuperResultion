@@ -60,12 +60,14 @@ class Re39000Dataset(Dataset):
 
 
 class Turb2DDataset(Dataset):
-    def __init__(self,data_dir:str=None,ds:int=1,time_idx:int=None):
+    def __init__(self,data_dir:str=None,ds:int=1,dt:int=1,time_idx:int=None):
 
         tb = Turb2D(data_dir)
         tb.setup()
         tb.load_data(time_idx)
 
+        # Data in Turb2D are (T,R,R,D)
+        t = tb.t
         X = tb.xy
         y = tb.uv
 
@@ -73,19 +75,38 @@ class Turb2DDataset(Dataset):
         y = y/np.max(np.abs(y))
         assert np.min(y) >= -1
         assert np.max(y) <=  1
-        
+
         assert X.shape[0] == y.shape[0]
+        assert len(X.shape) in [3,4]
 
-        # downsampling
-        X = X[::ds, ::ds, :]
-        y = y[::ds, ::ds, :]
+        if len(X.shape) == 3: # single image/time
+            
+            # downsampling
+            X = X[::ds, ::ds, :]
+            y = y[::ds, ::ds, :]
+        
+            self.res = X.shape[0] 
+            self.img_shape = X.shape # (R,R,2)
 
-        self.img_shape = X.shape[:2]
-        self.res = int(np.sqrt(X.shape[0]))
+            self.X = torch.from_numpy(X).float().view(-1,2)
+            self.y = torch.from_numpy(y).float().view(-1,2)
+            self.t = torch.from_numpy(t).float()
+            self.size = self.X.shape[0]
 
-        self.X = torch.from_numpy(X).float().view(-1,2)
-        self.y = torch.from_numpy(y).float().view(-1,2)
-        self.size = self.X.shape[0]
+        if len(X.shape) == 4: # multiple images/times
+            # downsampling
+            X = X[::dt, ::ds, ::ds, :]
+            y = y[::dt, ::ds, ::ds, :]
+            t = t[::dt]
+        
+            self.times = X.shape[0]
+            self.res = X.shape[1] 
+            self.img_shape = X.shape[1:3] # (R,R,2)
+
+            self.X = torch.from_numpy(X).float().view(-1,2)
+            self.t = torch.from_numpy(t).float()
+            self.y = torch.from_numpy(y).float().view(-1,2)
+            self.size = self.X.shape[0]
 
         assert self.X.shape == self.y.shape
                 

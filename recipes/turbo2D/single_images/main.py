@@ -13,6 +13,8 @@ from pytorch_lightning.callbacks import EarlyStopping
 from turboflow.dataloaders import TurboFlowDataModule
 from turboflow.models.phyrff_hard import plDivFreeRFFNet
 
+# os.environ['WANDB_CONSOLE'] = 'off' # shutdown "AssertionError: can only test a child process"
+
 def get_path_and_prepare_folder():
     root_dir = os.path.dirname(os.path.realpath(__file__))
     return root_dir

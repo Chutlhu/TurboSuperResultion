@@ -5,8 +5,10 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 from turboflow.models.basics import *
+from turboflow.utils import phy_utils as phy
 from turboflow.utils import torch_utils as tch
 from turboflow.utils import file_utils as fle
+import turboflow.evaluation as evl
 
 import matplotlib.pyplot as plt
 
@@ -338,10 +340,10 @@ class DivFreeRFFNet(nn.Module):
 class plDivFreeRFFNet(pl.LightningModule):
 
     def __init__(self,  name:str, mlp_layers_num:int, mlp_layers_dim:int, 
-                        mlp_last_actfn:nn.Module,
+                        mlp_last_actfn:str,
                         do_rff:bool, rff_num:int, rff_scale:float,
                         do_divfree:bool,
-                        lam_pde:float, lam_reg:float, lam_sfn:float,
+                        lam_pde:float, lam_div:float, lam_reg:float, lam_sfn:float, lam_spec:float,
                         sfn_min_x:float, sfn_num_centers:int, sfn_num_increments:int, sfn_patch_dim:int):
 
         super(plDivFreeRFFNet, self).__init__()
@@ -377,8 +379,10 @@ class plDivFreeRFFNet(pl.LightningModule):
         
         # PINN losses
         self.lam_pde = lam_pde
+        self.lam_div = lam_div
         self.lam_reg = lam_reg
         self.lam_sfn = lam_sfn
+        self.lam_spec = lam_spec
         
         # reference image for logging on tensorboard
         patch_ln = torch.linspace(0, 1, 64)
@@ -400,8 +404,10 @@ class plDivFreeRFFNet(pl.LightningModule):
         group.add_argument("--rff_num", type=int, default=256)
         group.add_argument("--rff_scale", type=float, default=10)
         group.add_argument("--lam_pde", type=float, default=0)
+        group.add_argument("--lam_div", type=float, default=0)
         group.add_argument("--lam_reg", type=float, default=0)
         group.add_argument("--lam_sfn", type=float, default=0)
+        group.add_argument("--lam_spec", type=float, default=0)
         group.add_argument("--sfn_min_x", type=float, default=0.00784314)
         group.add_argument("--sfn_num_centers", type=int, default=5)
         group.add_argument("--sfn_patch_dim", type=int, default=32)
@@ -429,25 +435,34 @@ class plDivFreeRFFNet(pl.LightningModule):
         # It is independent of forward
         X_batch, y_batch = batch
 
-        # ## FORWARD
+        R = int(X_batch.shape[0]**0.5)
+
+        ## FORWARD
         y_hat, Py_hat = self.forward(X_batch)
 
         ## REGULARIZATION and LOSSES
+        # OFF GRID REGULARIZATIAN
+        loss_spec = 0
+        if self.lam_spec > 0:
+            tke_spec_hat = phy.energy_spectrum(y_hat.reshape(R,R,2).permute(2,0,1))[0]
+            tke_spec_batch = phy.energy_spectrum(y_batch.reshape(R,R,2).permute(2,0,1))[0]
+            loss_spec = F.mse_loss( torch.log(tke_spec_hat+1e-20),
+                                    torch.log(tke_spec_batch+1e-20))
+
         # L2 regularization on the gradient of the potential
         loss_reg = 0
         if self.lam_reg > 0:
-            dP_xy = torch.autograd.grad(Py_hat, X_batch, torch.ones_like(Py_hat), create_graph=True)[0]       
-            loss_reg = torch.norm(dP_xy[:,0] + dP_xy[:,1])**2
+            X_random = montecarlo_sampling_xcenters_xincerments(
+                self.n_centers, self.n_increments, self.patch_dim, self.min_l, self.device)
+            X_random.requires_grad_(True)
+            y_random_hat, Py_hat_random = self.forward(X_random.view(-1,2))
+            dP_xy = torch.autograd.grad(Py_hat_random, X_random, torch.ones_like(Py_hat_random), create_graph=True)[0]       
+            loss_reg = torch.norm(dP_xy[:,0] + dP_xy[:,1])**2 / dP_xy.shape[0]
 
         # Sfun regularization
         loss_sfn = 0
         if self.lam_sfn > 0:
             # 2.c Sfun-based loss
-            # X_patches = make_offgrid_patches_xcenter_xincrement(
-            #     self.n_increments, self.n_centers, self.min_l, self.patch_dim, self.device)
-            # I, C, P, P, D = X_patches.shape
-            # y_patches_hat, _ = self.forward(X_patches.reshape(I*C*P*P,D))
-            # y_patches_hat = y_patches_hat.reshape(I, C, P, P, D)
             X_random = montecarlo_sampling_xcenters_xincerments(
                 self.n_centers, self.n_increments, self.patch_dim, self.min_l, self.device)
             shape = X_random.shape # I x C x P x D
@@ -457,13 +472,8 @@ class plDivFreeRFFNet(pl.LightningModule):
 
             # compute structure function
             Sfun2 = torch.mean((y_random_hat - y_random_hat[0,...])**2, dim=[3,1,2])
-            loss_sfn = torch.sum(torch.abs(torch.log(Sfun2+1e-10) - torch.log(self.sfun_model.to(X_batch.device)+1e-10))**2)
-
-            if self.current_epoch % 100 == 0:
-                plt.loglog(Sfun2.detach().cpu().numpy())
-                plt.loglog(self.sfun_model.detach().cpu().numpy())
-                plt.savefig(f'./sfun_epoch-{self.current_epoch}.png')
-                plt.close()
+            loss_sfn = F.mse_loss(  torch.log(Sfun2+1e-20),
+                                    torch.log(self.sfun_model.to(X_batch.device)+1e-20))
 
         # DivFree regularization
         loss_pde = 0
@@ -471,20 +481,56 @@ class plDivFreeRFFNet(pl.LightningModule):
             u, v = torch.split(y_hat,1,-1)
             du_xy = torch.autograd.grad(u, X_batch, torch.ones_like(u), create_graph=True)[0]       
             dv_xy = torch.autograd.grad(v, X_batch, torch.ones_like(v), create_graph=True)[0]
-            loss_pde = torch.norm(du_xy[...,0] + dv_xy[...,1])**2
-    
+            div_autograd = du_xy[...,0] + dv_xy[...,1]
+            loss_pde = torch.norm(div_autograd)**2
+
+        # spatial gradient and numerical grandient should be equal
+        loss_div = 0
+        if self.lam_div > 0:
+            u, v = torch.split(y_hat,1,-1)
+            du_x = tch._my_field_grad(u.reshape(R,R), 1) # dimension inverted with indexing ij
+            dv_y = tch._my_field_grad(v.reshape(R,R), 0)
+            div_numerical = du_x + dv_y
+            loss_div = torch.norm(div_autograd - div_numerical.view(-1,1))**2
+
+        # navier-stokes
+        #TODO
+
         # # Reconstruction loss
         loss_rec = F.mse_loss(y_hat, y_batch)
 
         # # Total loss
-        loss = loss_rec + self.lam_pde*loss_pde + self.lam_reg*loss_reg + self.lam_sfn*loss_sfn
+        loss = loss_rec + self.lam_pde*loss_pde + self.lam_reg*loss_reg + self.lam_sfn*loss_sfn \
+            + self.lam_spec*loss_spec + self.lam_div*loss_div
         
         # LOGs, PRINTs and PLOTs
         self.log(f'{stage}_loss', loss, on_epoch=True)
-        self.log(f'{stage}_sfn', loss_sfn, on_epoch=True)
-        self.log(f'{stage}_rec', loss_rec, on_epoch=True)
-        self.log(f'{stage}_pde', loss_pde, on_epoch=True)
-        self.log(f'{stage}_reg', loss_reg, on_epoch=True)
+        self.log(f'{stage}/loss/sfn',  loss_sfn, on_epoch=True)
+        self.log(f'{stage}/loss/rec',  loss_rec, on_epoch=True)
+        self.log(f'{stage}/loss/pde',  loss_pde, on_epoch=True)
+        self.log(f'{stage}/loss/div',  loss_div, on_epoch=True)
+        self.log(f'{stage}/loss/reg',  loss_reg, on_epoch=True)
+        self.log(f'{stage}/loss/spec', loss_spec, on_epoch=True)
+
+        eval_metrics = evl.compute_all_metrics(y_hat, y_batch, avg=True)
+        self.log(f'{stage}/metrics/reconstruction', eval_metrics['reconstruction'])
+        self.log(f'{stage}/metrics/angular_degree', eval_metrics['angular_degree'])
+        self.log(f'{stage}/metrics/log_err_specturm', eval_metrics['log_err_specturm'])
+
+        # some plots
+        if self.current_epoch % 100 == 0:
+            # plot structure function
+            if self.lam_sfn > 0:
+                plt.loglog(Sfun2.detach().cpu().numpy())
+                plt.loglog(self.sfun_model.detach().cpu().numpy())
+                plt.savefig(f'./figures/sfun_epoch-{self.current_epoch}.png')
+                plt.close()
+            # plot spectrum
+            if self.lam_spec > 0:
+                plt.loglog(tke_spec_hat.detach().cpu().numpy())
+                plt.loglog(tke_spec_batch.detach().cpu().numpy())
+                plt.savefig(f'./figures/tke_epoch-{self.current_epoch}.png')
+                plt.close()
 
         return loss
 
@@ -497,7 +543,14 @@ class plDivFreeRFFNet(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         torch.set_grad_enabled(True) # needed for divergenge
-        return self._common_step(batch, batch_idx, 'test')
+        X_batch, y_batch = batch
+        y_hat, Py_hat = self.forward(X_batch)
+        eval_metrics = evl.compute_all_metrics(y_hat, y_batch, avg=True)
+        self.log('test/metrics/reconstruction', eval_metrics['reconstruction'])
+        self.log('test/metrics/angular_degree', eval_metrics['angular_degree'])
+        self.log('test/metrics/log_err_specturm', eval_metrics['log_err_specturm'])
+        loss_rec = F.mse_loss(y_hat, y_batch)
+        return loss_rec
 
     #  add optional logic at the end of the training
     #  the function is called after every epoch is completed
@@ -529,14 +582,8 @@ class plDivFreeRFFNet(pl.LightningModule):
         # dummy_input = torch.rand((3,2))
         # dummy_input.requires_grad_(True)
         # self.logger.experiment.add_graph(plDivFreeRFFNet(self.hparams), dummy_input)
-        # 1/0
 
         # LOG IMAGES
-        # x_lr = self.reference_input_lr.clone().to(self.device)
-        # u_lr, Pu_lr = self.forward(x_lr)
-        # self.prediction_image_adder(x_lr, u_lr, Pu_lr, 64, 'lr')
-        # x_hr = self.reference_input_hr.clone().to(self.device)
-        # u_hr, Pu_hr = self.forward(x_hr)
         # self.prediction_image_adder(x_hr, u_hr, Pu_hr, 256, 'hr')
         
         # self.custom_histogram_adder()
