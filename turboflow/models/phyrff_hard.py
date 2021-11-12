@@ -343,7 +343,7 @@ class plDivFreeRFFNet(pl.LightningModule):
                         mlp_last_actfn:str,
                         do_rff:bool, rff_num:int, rff_scale:float,
                         do_divfree:bool,
-                        lam_pde:float, lam_div:float, lam_reg:float, lam_sfn:float, lam_spec:float,
+                        lam_pde:float, lam_div:float, lam_reg:float, lam_sfn:float, lam_spec:float, lam_weight:float,
                         sfn_min_x:float, sfn_num_centers:int, sfn_num_increments:int, sfn_patch_dim:int):
 
         super(plDivFreeRFFNet, self).__init__()
@@ -383,6 +383,7 @@ class plDivFreeRFFNet(pl.LightningModule):
         self.lam_reg = lam_reg
         self.lam_sfn = lam_sfn
         self.lam_spec = lam_spec
+        self.lam_weight = lam_weight
         
         # reference image for logging on tensorboard
         patch_ln = torch.linspace(0, 1, 64)
@@ -408,6 +409,7 @@ class plDivFreeRFFNet(pl.LightningModule):
         group.add_argument("--lam_reg", type=float, default=0)
         group.add_argument("--lam_sfn", type=float, default=0)
         group.add_argument("--lam_spec", type=float, default=0)
+        group.add_argument("--lam_weight", type=float, default=0)
         group.add_argument("--sfn_min_x", type=float, default=0.00784314)
         group.add_argument("--sfn_num_centers", type=int, default=5)
         group.add_argument("--sfn_patch_dim", type=int, default=32)
@@ -590,7 +592,7 @@ class plDivFreeRFFNet(pl.LightningModule):
         pass
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4, weight_decay=self.lam_weight)
         # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, )
         return {"optimizer": optimizer, 
                 # "lr_scheduler": scheduler,

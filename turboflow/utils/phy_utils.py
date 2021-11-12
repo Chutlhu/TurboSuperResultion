@@ -10,9 +10,9 @@ Sources
 """
 
 def _check_dims_img(uv):
-    # check that uv is (2,R,R)
+    # check that uv is (R,R,2)
     res = uv.shape[1:]
-    assert len(res) == uv.shape[0]
+    assert len(res) == uv.shape[0] == 2
     assert res[0] == res[1]
 
 def _check_dim_vect(uv):
@@ -277,6 +277,9 @@ def _my_spec_grad(S):
     # compute gradient (dS = j*w*S)
     return 1j*k*S
 
+def fluct(uv):
+    _check_dims_img(uv)
+    return uv - torch.mean(uv, dim=[0,1])
 
 def tkenergy(uv):
     _check_dims_img(uv)

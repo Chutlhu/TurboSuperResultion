@@ -86,16 +86,18 @@ def test_dataloader_turb2D_single_time_idx():
     assert X.shape == y.shape
     assert X.shape[1] == 2
 
+
 def test_dataloader_turb2D_multiple_time_indeces():
     t = np.arange(200,300)
     trainset = Turb2DDataset(data_dir, ds=1, time_idx=t)
     X, y = trainset[:]
-    assert X.shape == y.shape
+    assert X.shape[0] == y.shape[0]
     assert X.shape[1] == 3
+    assert X[0,0] == 2.
 
 @pytest.mark.parametrize("ds", [1, 4, 16, 32])
 def test_dataloader_turb2D_downsampling(ds):
     t = np.arange(200,300)
     trainset = Turb2DDataset(data_dir, ds=ds, time_idx=t)
     X, y = trainset[:]
-    assert int(X.shape[0]**.5) == 256//ds
+    assert int((X.shape[0]/100)**.5) == 256//ds
