@@ -87,41 +87,77 @@ def animate_field(xy_img_t, uv_img_t, step=5, scale=20, indexing='ij'):
 ###############################################################################
 
 
-def plot_lr_hr_inset(ulr, uhr, L, H, title=None, add_extremes_in_title=False):
+def plot_lr_hr_inset(ulr, uhr, L, H, title=None, 
+region=(0.05, 0.35, 0.45, 0.75),
+figsize=(6,6), add_extremes_in_title=False, only_u=False):
 
-    ## Plot figures Resolution of Velocity Field
-    fig, axarr = plt.subplots(1,2,figsize=[10, 10])
-    plt.suptitle(title,fontsize=20, y=0.75)
 
-    for i in range(ulr.shape[-1]):
+    if only_u:
+        fig = plt.figure(figsize=figsize)
+        
+        i = 0
         IMG = ulr[:,i].reshape(L,L)
         IMGzoom = uhr[:,i].reshape(H,H)[:H,:H]
         
         extent = (0, 1, 0, 1)
-        im = axarr[i].imshow(IMG,  extent=extent, origin="upper")
+        plt.imshow(IMG,  extent=extent, origin="upper")
 
         if add_extremes_in_title:
             suffix = ' in [%1.2f, %1.3f]' % (np.min(IMG[:,i]), np.max(IMG[:,i]))
         else:
             suffix = ''
 
-        if i == 0:
-            axarr[i].set_title(r'$u_x$' + suffix)
-        if i == 1:
-            axarr[i].set_title(r'$u_y$' + suffix)
-        axarr[i].set_xlabel(r'$x$')
-        axarr[i].set_ylabel(r'$y$')
+        plt.title(title + r': $u_x$' + suffix)
+        plt.xlabel(r'$x$')
+        plt.ylabel(r'$y$')
+
+        ax = plt.gca()
 
         # inset axes....
-        axins = axarr[i].inset_axes([0.5, 0.0, 0.5, 0.5])
+        axins = ax.inset_axes([0.4, 0.0, 0.6, 0.6])
         axins.imshow(IMGzoom, extent=extent, origin="upper")
         # sub region of the original image
-        x1, x2, y1, y2 = 0.15, 0.45, 0.6, 0.9
+        x1, x2, y1, y2 = region
         axins.set_xlim(x1, x2)
         axins.set_ylim(y1, y2)
         axins.set_xticklabels('')
         axins.set_yticklabels('')
-        axarr[i].indicate_inset_zoom(axins, edgecolor="black")
+        ax.indicate_inset_zoom(axins, edgecolor="black")
+    
+    else:
+
+        fig, axarr = plt.subplots(1,2,figsize=figsize)
+        plt.suptitle(title,fontsize=20, y=0.75)
+
+        for i in range(ulr.shape[-1]):
+            IMG = ulr[:,i].reshape(L,L)
+            IMGzoom = uhr[:,i].reshape(H,H)[:H,:H]
+            
+            extent = (0, 1, 0, 1)
+            im = axarr[i].imshow(IMG,  extent=extent, origin="upper")
+
+            if add_extremes_in_title:
+                suffix = ' in [%1.2f, %1.3f]' % (np.min(IMG[:,i]), np.max(IMG[:,i]))
+            else:
+                suffix = ''
+
+            if i == 0:
+                axarr[i].set_title(r'$u_x$' + suffix)
+            if i == 1:
+                axarr[i].set_title(r'$u_y$' + suffix)
+            axarr[i].set_xlabel(r'$x$')
+            axarr[i].set_ylabel(r'$y$')
+
+            # inset axes....
+            axins = axarr[i].inset_axes([0.4, 0.0, 0.6, 0.6])
+            axins.imshow(IMGzoom, extent=extent, origin="upper")
+            # sub region of the original image
+            x1, x2, y1, y2 = region
+            axins.set_xlim(x1, x2)
+            axins.set_ylim(y1, y2)
+            axins.set_xticklabels('')
+            axins.set_yticklabels('')
+            axarr[i].indicate_inset_zoom(axins, edgecolor="black")
 
     fig.tight_layout()
 
@@ -130,6 +166,8 @@ def plot_lr_hr_inset(ulr, uhr, L, H, title=None, add_extremes_in_title=False):
 
 def plot_velocity_field(xlr, ulr, L, xhr, uhr, H,
                         title=None,
+                        region=(0.05, 0.35, 0.45, 0.75),
+                        figsize=(10,10),
                         scale_lr=1, step_lr=1,
                         scale_hr=1, step_hr=1):
 
@@ -146,7 +184,7 @@ def plot_velocity_field(xlr, ulr, L, xhr, uhr, H,
     color_hr = np.sqrt((uxhr**2) + (uyhr**2))
 
     s = step_lr
-    fig, ax = plt.subplots(1,1,figsize=[5, 5])
+    fig, ax = plt.subplots(1,1,figsize=figsize)
     plt.title(title)
     ax.quiver(xxlr[::s,::s], yylr[::s,::s], 
               uxlr[::s,::s], uylr[::s,::s], 
@@ -156,12 +194,12 @@ def plot_velocity_field(xlr, ulr, L, xhr, uhr, H,
 
     # inset axes....
     s = step_hr
-    axins = ax.inset_axes([0.5, 0.0, 0.5, 0.5])
+    axins = ax.inset_axes([0.4, 0.0, 0.6, 0.6])
     axins.quiver(xxhr[::s,::s], yyhr[::s,::s], 
                  uxhr[::s,::s], uyhr[::s,::s], 
                  color_hr[::s,::s], scale=scale_hr)
     # sub region of the original image
-    x1, x2, y1, y2 = 0.15, 0.45, 0.6, 0.9
+    x1, x2, y1, y2 = region
     axins.set_xlim(x1, x2)
     axins.set_ylim(y1, y2)
     axins.set_xticklabels('')

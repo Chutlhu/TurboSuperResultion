@@ -36,14 +36,15 @@ def my_grad(f:tuple, sp:tuple, indexing:str = "xy"):
     Returns:
         Components x Directions: grad[j][i] is the gradient of j-th component of F with respect direction i
     """
-    num_dims = len(f)
+    num_dims_f = len(f)
+    num_dims_sp = len(sp)
     if indexing == "xy":
         raise NotImplementedError
         # return [[np.gradient(f[num_dims - j - 1], sp[i], axis=i, edge_order=1) 
         #         for i in range(num_dims)] for j in range(num_dims)]
     if indexing == "ij":
         return [[np.gradient(f[j], sp[i], axis=i, edge_order=1) 
-                for i in range(num_dims)] for j in range(num_dims)]
+                for i in range(num_dims_sp)] for j in range(num_dims_f)]
 
 
 def compute_vorticity(xy:tuple, uv:tuple, indexing='ij'):
@@ -173,16 +174,16 @@ def energy_spectrum(uv):
     U = uv/U0
     dims = uv.shape[1] * uv.shape[2]
 
-    Ek_u = torch.abs(torch.fft.fft2(uv[0,:,:])/dims)
-    Ek_v = torch.abs(torch.fft.fft2(uv[1,:,:])/dims)
+    Ek_u = torch.abs(torch.fft.fft2(uv[0,:,:])/dims).float()
+    Ek_v = torch.abs(torch.fft.fft2(uv[1,:,:])/dims).float()
     Ek = 0.5 * (Ek_u**2 + Ek_v**2)
     Ek = torch.fft.fftshift(Ek)
 
     box_size_x = Ek.shape[0]
     box_size_y = Ek.shape[1]
     
-    centerx = int(box_size_x/2)
-    centery = int(box_size_y/2)
+    cx = int(box_size_x/2)
+    cy = int(box_size_y/2)
 
     box_radius = int(np.ceil((np.sqrt((box_size_x)**2+(box_size_y)**2))/2.)+1)
     
@@ -190,11 +191,69 @@ def energy_spectrum(uv):
 
     for i in range(box_size_x):
         for j in range(box_size_y):
-            wn =  int(np.round(np.sqrt((i-centerx)**2+(j-centery)**2)))
+            # EK_U_avsphr[wn[i,j]] = EK_U_avsphr[wn[i,j]] + Ek[i,j]
+            wn =  int(np.round(np.sqrt((i-cx)**2+(j-cy)**2)))
             EK_U_avsphr[wn] = EK_U_avsphr[wn] + Ek[i,j]
     
     spec = EK_U_avsphr
-    k_bin = np.arange(0,len(spec))
+    k_bin = torch.arange(0,len(spec))
+    return spec, k_bin
+
+def fast_energy_spectrum(uv):
+    """
+    Compute energy spectrum given a velocity field
+    :param vel: tensor of shape (2, R, R)
+    :return spec: tensor of shape(res/2)
+    :return k: tensor of shape (res/2,), frequencies corresponding to spec
+    """
+    res = uv.shape[-2:]
+
+    assert len(res) == uv.shape[0]
+    assert res[0] == res[1]
+
+    eps = 1e-50
+    c = np.sqrt(1.4)
+    Ma= 0.1
+    U0 = Ma * c
+    U = uv/U0
+    dims = uv.shape[1] * uv.shape[2]
+
+    Ek_u = torch.abs(torch.fft.fft2(uv[0,:,:])/dims).float()
+    Ek_v = torch.abs(torch.fft.fft2(uv[1,:,:])/dims).float()
+    Ek = 0.5 * (Ek_u**2 + Ek_v**2)
+    Ek = torch.fft.fftshift(Ek)
+
+    box_size_x = Ek.shape[0]
+    box_size_y = Ek.shape[1]
+    
+    cx = int(box_size_x/2)
+    cy = int(box_size_y/2)
+
+    box_radius = int(np.ceil((np.sqrt((box_size_x)**2+(box_size_y)**2))/2.)+1)
+    
+    EK_U_avsphr = torch.zeros(box_radius).float().to(uv.device) + eps
+
+    i = torch.arange(box_size_x).long()
+    j = torch.arange(box_size_y).long()
+    ii, ij = torch.meshgrid(i, j)
+    wn = torch.round(torch.sqrt((ii - cx)**2 + (ij - cy)**2)).long()
+    print(wn.shape)
+    print(Ek.shape)
+    print(Ek[wn].shape)
+
+    bins = torch.arange(0,box_radius)
+    inds = torch.searchsorted(bins, Ek.flatten())
+    
+    1/0
+
+    for i in range(box_size_x):
+        for j in range(box_size_y):
+            # EK_U_avsphr[wn[i,j]] = EK_U_avsphr[wn[i,j]] + Ek[i,j]
+            wn =  int(np.round(np.sqrt((i-cx)**2+(j-cy)**2)))
+            EK_U_avsphr[wn] = EK_U_avsphr[wn] + Ek[i,j]
+    
+    spec = EK_U_avsphr
+    k_bin = torch.arange(0,len(spec))
     return spec, k_bin
 
 

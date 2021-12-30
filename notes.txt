@@ -1,0 +1,11 @@
+# x8 zoom - MLP: 1024 RFF Lw 1e-4
+.torch_checkpoints/Turb2D-RFFNet-epoch=1759-val_loss=0.00.ckpt'
+
+# x8 zoom - MLP: 1024 RFF Lw 1e-4 DivFree 1e-3
+.torch_checkpoints/Turb2D-RFFNet-epoch=1939-val_loss=0.00.ckpt'
+
+# x8 zoom - MLP: 1024 RFF Lw 1e-4 DivFree 1e-5
+Turb2D-RFFNet-epoch=479-val_loss=0.00.ckpt
+
+# x8 zoom - MLP: 1024 RFF Lw 1e-4 DivFree 1e-5 Grads 1e-3
+Turb2D-RFFNet-epoch=439-val_loss=0.00.ckpt'

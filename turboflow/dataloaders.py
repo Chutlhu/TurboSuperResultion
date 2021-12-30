@@ -2,6 +2,7 @@ from datetime import time
 import glob
 import torch
 import numpy as np
+from pathlib import  Path
 
 from natsort import natsorted
 from torch.utils import data
@@ -149,7 +150,7 @@ class TurboFlowDataModule(pl.LightningDataModule):
         if self.dataset == 'Re39000':
             self.dataset_fn = Re39000Dataset
 
-        self.data_dir = data_dir
+        self.data_dir = Path(data_dir)
         self.batch_size = batch_size
         self.time_idx = time_idx
         self.train_ds = train_downsampling
@@ -193,7 +194,7 @@ class TurboFlowDataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
             self.train_dataset = self.dataset_fn(self.data_dir, self.train_ds, self.train_dt, self.time_idx)
-            self.val_dataset = self.train_dataset
+            self.val_dataset = self.dataset_fn(self.data_dir, self.val_ds, self.val_dt, self.time_idx)
 
         if stage == "test" or stage is None:
             self.test_dataset = self.dataset_fn(self.data_dir, self.test_ds, self.train_dt, self.time_idx)
