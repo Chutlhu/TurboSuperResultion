@@ -28,20 +28,30 @@ def interpolate2D_mesh01x01(xy, z, scale):
     delta_x = x[1] - x[0]
     delta_y = y[1] - y[0]
 
-    f_interp2d = interpolate.interp2d(x, y, z, kind='linear') # 'cubic'
+    f_interp2d = interpolate.interp2d(x, y, z, kind='cubic') # 'cubic'
 
-    x = (delta_x/float(scale)) * np.arange(out_npoints)
-    y = (delta_y/float(scale)) * np.arange(out_npoints)
+    x = np.linspace(0, 1, out_npoints, endpoint=True)
+    y = np.linspace(0, 1, out_npoints, endpoint=True)
 
     assert x[-1] <= 1.
     assert y[-1] <= 1.
 
-    return f_interp2d(x, y).T
+    xy = np.stack(np.meshgrid(x, y), axis=-1)
+
+
+    return f_interp2d(x, y), xy
 
 def interpolate2D_t(ti, xi, yi, f_txyi, to, xo, yo):
 
     assert len(xi) > 1
     assert len(yi) > 1
+
+    if ti is None:
+        in_points = (xi, yi)         # input grid
+        values = f_txyi
+        out_points = alg.make_xy_grid(xo, yo)
+
+        interpolation = interpolate.interpn(in_points, values, out_points)[None,...]
 
     if len(ti) == 1:
         assert len(ti) == len(to) == f_txyi.shape[0]

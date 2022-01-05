@@ -233,15 +233,15 @@ class plDivFreeRFFNet(pl.LightningModule):
 
         
         # reference image for logging on tensorboard
-        self.L = 32
-        patch_ln = torch.linspace(0, 1, self.L)
-        patch_sq = torch.stack(torch.meshgrid(patch_ln, patch_ln), dim=-1)
-        self.reference_input_lr = patch_sq.view(-1,2)
-        self.H = 128
-        patch_ln = torch.linspace(0, 1, self.H)
-        patch_sq = torch.stack(torch.meshgrid(patch_ln, patch_ln), dim=-1)
-        self.patch_sq = patch_sq
-        self.reference_input_hr = patch_sq.view(-1,2)
+        self.L = 64
+        patch_ln_lr = torch.linspace(0, 1, self.L)
+        patch_sq_lr = torch.stack(torch.meshgrid(patch_ln_lr, patch_ln_lr), dim=-1)
+        self.reference_input_lr = patch_sq_lr.view(-1,2)
+        self.H = 256
+        patch_ln_hr = torch.linspace(0, 1, self.H)
+        patch_sq_hr = torch.stack(torch.meshgrid(patch_ln_hr, patch_ln_hr), dim=-1)
+        self.patch_sq_hr = patch_sq_hr
+        self.reference_input_hr = patch_sq_hr.view(-1,2)
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -412,7 +412,7 @@ class plDivFreeRFFNet(pl.LightningModule):
             # self.H = 256
             # patch_ln = torch.linspace(0, 1, self.H)
             # patch_sq = torch.meshgrid(patch_ln, patch_ln, device=X_batch.device) # H x H
-            patch_sq = self.patch_sq.to(X_batch.device) # H x H x 2
+            patch_sq = self.patch_sq_hr.to(X_batch.device) # H x H x 2
             size = (self.n_increments, *patch_sq.shape) 
             X_incr = patch_sq.unsqueeze(0).expand(size) # I x H x H x D
             increments = self.min_l * torch.arange(0,self.n_increments,device=X_batch.device) 
@@ -459,10 +459,12 @@ class plDivFreeRFFNet(pl.LightningModule):
         self.log(f'{stage}/loss/curl', loss_curl,  on_epoch=True, on_step=False)
         self.log(f'{stage}/loss/pde',  loss_pde,   on_epoch=True, on_step=False)
 
-        eval_metrics = evl.compute_all_metrics(y_hat, y_batch, avg=True)
-        self.log(f'{stage}/metrics/reconstruction', eval_metrics['reconstruction'])
-        self.log(f'{stage}/metrics/angular_degree', eval_metrics['angular_degree'])
-        self.log(f'{stage}/metrics/log_err_specturm', eval_metrics['log_err_specturm'])
+
+        err_rec = evl.recostruction_error(y_hat, y_batch, avg=True)
+        err_ang = evl.angular_error_2Dfield(y_hat, y_batch, avg=True)
+        self.log(f'{stage}/metrics/reconstruction', err_rec)
+        self.log(f'{stage}/metrics/angular_degree', err_ang)
+        # self.log(f'{stage}/metrics/log_err_specturm', eval_metrics['log_err_specturm'])
 
         return loss
 
@@ -477,10 +479,15 @@ class plDivFreeRFFNet(pl.LightningModule):
         torch.set_grad_enabled(True) # needed for divergenge
         X_batch, y_batch = batch
         y_hat, Py_hat = self.forward(X_batch)
-        eval_metrics = evl.compute_all_metrics(y_hat, y_batch, avg=True)
-        self.log('test/metrics/reconstruction', eval_metrics['reconstruction'])
-        self.log('test/metrics/angular_degree', eval_metrics['angular_degree'])
-        self.log('test/metrics/log_err_specturm', eval_metrics['log_err_specturm'])
+
+        err_rec = evl.recostruction_error(y_hat, y_batch, avg=True)
+        err_ang = evl.angular_error_2Dfield(y_hat, y_batch, avg=True)
+        self.log('test/metrics/reconstruction', err_rec)
+        self.log('test/metrics/angular_degree', err_ang)
+        # eval_metrics = evl.compute_all_metrics(y_hat, y_batch, avg=True)
+        # self.log('test/metrics/reconstruction', eval_metrics['reconstruction'])
+        # self.log('test/metrics/angular_degree', eval_metrics['angular_degree'])
+        # self.log('test/metrics/log_err_specturm', eval_metrics['log_err_specturm'])
         loss_rec = F.mse_loss(y_hat, y_batch)
         return loss_rec
 
