@@ -4,28 +4,37 @@ import torch.nn.functional as F
 
 pi = 3.14159265359
 
-def gradient(x):
-    # idea from tf.image.image_gradients(image)
-    # https://github.com/tensorflow/tensorflow/blob/r2.1/tensorflow/python/ops/image_ops_impl.py#L3441-L3512
-    # x: (b,c,h,w), float32 or float64
-    # dx, dy: (b,c,h,w)
+class MLP(nn.Module):
+    
+    def __init__(self, dim_layers, last_activation_fun_name):
+        super(MLP, self).__init__()
+        layers = []
+        num_layers = len(dim_layers)
+        
+        blocks = []
+        for l in range(num_layers-2):
+            blocks.append(LinearTanh(dim_layers[l], dim_layers[l+1]))
+            
+        blocks.append(nn.Linear(dim_layers[-2], dim_layers[-1]))
+        blocks.append(self.last_activation_function(last_activation_fun_name))
+        self.network = nn.Sequential(*blocks)
+    
+    def forward(self, x):
+        return self.network(x)
 
-    h_x = x.size()[-2]
-    w_x = x.size()[-1]
-    # gradient step=1
-    left = x
-    right = F.pad(x, [0, 1, 0, 0])[:, :, :, 1:]
-    top = x
-    bottom = F.pad(x, [0, 0, 0, 1])[:, :, 1:, :]
-
-    # dx, dy = torch.abs(right - left), torch.abs(bottom - top)
-    dx, dy = right - left, bottom - top 
-    # dx will always have zeros in the last column, right-left
-    # dy will always have zeros in the last row,    bottom-top
-    dx[:, :, :, -1] = 0
-    dy[:, :, -1, :] = 0
-
-    return dx, dy
+    @staticmethod
+    def last_activation_function(fun_name:str)->nn.Module:
+        if fun_name == 'tanh':
+            return nn.Tanh()
+        if fun_name == 'sigmoid':
+            return nn.Sigmoid()
+        if fun_name == 'relu':
+            return nn.ReLU()
+        if fun_name == 'id':
+            return nn.Identity()
+        if fun_name == 'ELU':
+            return nn.ELU()
+        return None
 
 
 class DivFree2DBasis(nn.Module):
@@ -61,6 +70,7 @@ class DivFree2DBasis(nn.Module):
         
         return torch.cat([a, b], -1)
 
+
 class Fourier(nn.Module):
     
     def __init__(self, nfeat, scale):
@@ -71,7 +81,20 @@ class Fourier(nn.Module):
         x = torch.einsum('bc,cf->bf', 2*pi*x, self.b.to(x.device))
         return torch.cat([torch.sin(x), torch.cos(x)], -1)
 
-    
+
+class MTL(nn.Module):
+
+    def __init__(self):
+        super(MTL, self).__init__()
+
+        self.log_sigma_sqr_rec = nn.Parameter(torch.Tensor([2])).float()
+        self.log_sigma_sqr_sdiv = nn.Parameter(torch.Tensor([2])).float()
+        self.log_sigma_sqr_sfn = nn.Parameter(torch.Tensor([2])).float()
+        self.log_sigma_sqr_grads = nn.Parameter(torch.Tensor([2])).float()
+
+    def forward(self, x):
+        return x
+
 def LinearReLU(n_in, n_out):
     # do not work with ModuleList here either.
     block = nn.Sequential(

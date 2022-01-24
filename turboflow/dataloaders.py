@@ -111,8 +111,10 @@ class Turb2DDataset(Dataset):
             # downsampling
             X = X[::dt, ::ds, ::ds, :]
             y = y[::dt, ::ds, ::ds, :]
-            t = t[::dt, None, None, None] * np.ones((X.shape[0], X.shape[1], X.shape[2], 1))
+            t = t[::dt] 
+            self.t = torch.from_numpy(t).float()
             
+            t = t[:, None, None, None] * np.ones((X.shape[0], X.shape[1], X.shape[2], 1))
             X = np.concatenate([t, X], axis=-1)
 
             self.times = X.shape[0]
