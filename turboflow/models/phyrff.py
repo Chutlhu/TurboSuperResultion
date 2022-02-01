@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 import pytorch_lightning as pl
 
-from turboflow.models.core import LinearTanh, Fourier, MLP
+from turboflow.models.core import LinearTanh, Fourier, TimeFourier, MLP
 from turboflow.utils import phy_utils as phy
 from turboflow.utils import torch_utils as tch
 from turboflow.utils import file_utils as fle
@@ -101,7 +101,9 @@ class DivFree(nn.Module):
         assert f.shape[1] == 1
         assert xy.shape[1] == 2
         
-        f_xy = self.compute_ux(f, xy)
+        # f_xy = self.compute_ux(f, xy)
+        f_xy = tch.diff(f, xy)
+    
         div_free_uv = torch.cat([f_xy[:,1,None], 
                                 -f_xy[:,0,None]], dim=-1)
         assert div_free_uv.shape[1] == 2
@@ -109,22 +111,23 @@ class DivFree(nn.Module):
         return div_free_uv
 
 
-    def compute_ux(self, f, x):
-        assert x.requires_grad
+    # def compute_ux(self, f, x):
+    #     assert x.requires_grad
 
-        assert f.shape[1] == 1 # must be a scalar function
-        f_x = torch.autograd.grad(f, x, torch.ones_like(f),
-                                  create_graph=True,
-                                  retain_graph=True)[0]
-        assert f_x.shape == x.shape
-        return f_x
+    #     assert f.shape[1] == 1 # must be a scalar function
+    #     f_x = torch.autograd.grad(f, x, torch.ones_like(f))[0]
+    #     assert f_x.shape == x.shape
+    #     return f_x
     
 
 class plDivFreeRFFNet(pl.LightningModule):
 
-    def __init__(self,  name:str, mlp_layers_num:int, mlp_layers_dim:int, 
+    def __init__(self,  name:str,
+                        do_time:bool,
+                        mlp_layers_num:int, mlp_layers_dim:int, 
                         mlp_last_actfn:str,
-                        do_rff:bool, rff_num:int, rff_scale:float,
+                        rff_num_space:int, rff_scale_space:float,
+                        rff_num_time:int, rff_scale_time:float,
                         do_divfree:bool,
                         lam_pde:float, 
                         lam_sdiv:float,
@@ -141,25 +144,43 @@ class plDivFreeRFFNet(pl.LightningModule):
         self.name = name
         self.automatic_optimization = True
 
-        # regression/pinn network
-        if rff_num == 0:
-            do_rff = False
-        self.do_rff = rff_num
-        if do_rff:
-            self.rff = Fourier(rff_num, rff_scale) # directly the random matrix 'cause of checkpoint and load
-            mlp_layers_dim = [2*rff_num] + mlp_layers_num * [mlp_layers_dim] + [1]
+        if do_time:
+            nvarin = 3
         else:
-            self.rff = None
-            mlp_layers_dim = [2]  + mlp_layers_num * [mlp_layers_dim] + [1]
+            nvarin = 2
 
-        self.do_divfree = do_divfree
-        if do_divfree:
-            self.mlp = MLP(mlp_layers_dim, mlp_last_actfn)
-            self.div = DivFree()
-        else:
-            mlp_layers_dim[-1] = 2
-            self.mlp = MLP(mlp_layers_dim, mlp_last_actfn)
+        # regression/pinn network
+        self.do_rff = True
+
+        # space subnet
+        self.rff = Fourier(rff_num_space, rff_scale_space, nvars=3)
+        mlp_layers_dim = [2*rff_num_space] + mlp_layers_num * [mlp_layers_dim] + [2]
+
+        # mlp_layers_dim_space = [2*rff_num_space] + mlp_layers_num * [mlp_layers_dim] + [2]
         
+        # # self.rff_time = Fourier(rff_num_time, rff_scale_time, nvars=1)
+        # mlp_layers_dim_time = [1] + 2*[256] + [2]
+
+        # mlp_layers_dim_common = [2] + mlp_layers_num * [mlp_layers_dim] + [2]
+    
+        # self.do_rff = rff_num_space > 0
+        # if self.do_rff:
+        #     self.rff = Fourier(rff_num_space, rff_scale_space, do_time) # directly the random matrix 'cause of checkpoint and load
+        #     mlp_layers_dim = [nvarin*rff_num_space] + mlp_layers_num * [mlp_layers_dim] + [1]
+        # else:
+        #     self.rff = None
+        #     mlp_layers_dim = [nvarin]  + mlp_layers_num * [mlp_layers_dim] + [1]
+
+        # self.do_divfree = do_divfree
+        # if do_divfree:
+        #     self.mlp = MLP(mlp_layers_dim, mlp_last_actfn)
+        #     self.div = DivFree()
+        # else:
+        # self.mlp_space = MLP(mlp_layers_dim_space, mlp_last_actfn)
+        # self.mlp_time = MLP(mlp_layers_dim_time, mlp_last_actfn)
+        self.mlp = MLP(mlp_layers_dim, mlp_last_actfn)
+    
+
         # self.mtl = MTL()
 
         # off-grid regularization params
@@ -201,11 +222,12 @@ class plDivFreeRFFNet(pl.LightningModule):
         group = parent_parser.add_argument_group("model")
         group.add_argument("--name", type=str, default="DivFreeRFFNet")
         
+        group.add_argument("--do_time",     type=fle.str2bool, nargs='?', const=True, default=False)
+
         group.add_argument("--mlp_layers_num", type=int, default=3)
         group.add_argument("--mlp_layers_dim", type=int, default=256)
         group.add_argument("--mlp_last_actfn", type=str, default="tanh")
 
-        group.add_argument("--do_rff",     type=fle.str2bool, nargs='?', const=True, default=False)
         group.add_argument("--do_divfree", type=fle.str2bool, nargs='?', const=True, default=False)
         group.add_argument("--rff_num", type=int, default=256)
         group.add_argument("--rff_scale", type=float, default=10)
@@ -227,21 +249,27 @@ class plDivFreeRFFNet(pl.LightningModule):
     def forward(self, xin): # x := BxC(Batch, InputChannels)
         xin.requires_grad_(True)
         ## implement periodicity
-        x = torch.remainder(xin,1)
+        # x = torch.remainder(xin,1)
+        x = xin
         # x = 2*torch.abs(xin/2 - torch.floor(xin/2 + 0.5))
         ## Fourier features
-        if self.do_rff:
-            x = self.rff(x) # Batch x Fourier Features
-        
+        # if self.do_rff:
+        x = self.rff(x)
+        # x = self.mlp_space(x)
+        # t = self.mlp_time(x[:, :1])
+        x = self.mlp(x)
+
+        return x, None
+
         ## MLP
-        if self.do_divfree:
-            Px = self.mlp(x)
-            ## DivFree
-            u_df = self.div(Px, xin)
-            return u_df, Px
-        else:
-            x = self.mlp(x)
-            return x, None
+        # if self.do_divfree:
+        #     Px = self.mlp(x)
+        #     ## DivFree
+        #     u_df = self.div(Px, xin)
+        #     return u_df, Px
+        # else:
+        #     x = self.mlp(x)
+        #     return x, None
 
     def _common_step(self, batch, batch_idx:int, stage:str):
         # It is independent of forward
@@ -253,10 +281,43 @@ class plDivFreeRFFNet(pl.LightningModule):
         ## FORWARD BATCH
         y_hat, Py_hat = self.forward(X_batch)
 
+        # ddu = tch.diff(du, X_batch, order=2)
+        # u_xx, u_yy, u_tt = du.split(1, -1)
+        # ddv = tch.diff(dv, X_batch, order=2)
+        # v_xx, v_yy, v_tt = dv.split(1, -1)
 
         ## REGULARIZATION and LOSSES
-        # # Reconstruction loss
+        # Reconstruction loss
         loss_rec = F.mse_loss(y_hat, y_batch)
+
+        # # Navier Stokes loss (vorticity equation)
+        # u, v = torch.split(y_hat, 1, -1)
+        
+        # du = tch.diff(u, X_batch)
+        # u_x, u_y, u_t = du.split(1, -1)
+
+        # dv = tch.diff(v, X_batch)
+        # v_x, v_y, v_t = dv.split(1, -1)
+
+        # w = v_x - u_y
+        # dw = tch.diff(w, X_batch)
+        # w_x, w_y, w_t = dw.split(1, -1)
+        # ddw = tch.diff(dw, X_batch)
+        # w_xx, w_yy, w_tt = ddw.split(1, -1)
+
+        # # spatial change of vorticity / unit volume (u dot Nabla)w
+        # w_spatial = u*w_x + v*w_y
+        # # diffusion of vorticity / univ volume (nu Laplacian w)
+        # w_diffusion = (-1./3000.)*(w_xx + w_yy)
+
+        # # full NS equation
+        # res = w_t + w_spatial - w_diffusion
+        # loss_pde = F.mse_loss(res, torch.zeros_like(res))
+        loss_pde = 0
+
+        # # Divergenge Free
+        # res = u_x + v_y
+        # loss_sdiv = F.mse_loss(res, torch.zeros_like(res))
 
         # # OFF GRID REGULARIZATIAN on FULL GRID
         # ## FORWAND OFFGRID
@@ -394,29 +455,28 @@ class plDivFreeRFFNet(pl.LightningModule):
             # del X_incr
             # del patch_sq
 
-        loss = loss_rec
+        loss = loss_rec + self.lam_pde * loss_pde
+                # + self.lam_sdiv * loss_sdiv
             # + self.lam_sfn * loss_sfn \
             # + self.lam_grads * loss_grads \
-            # + self.lam_sdiv * loss_sdiv \
             # + self.lam_spec * loss_spec \
             # + self.lam_curl * loss_curl \
-            # + self.lam_pde * loss_pde
         
         # LOGs, PRINTs and PLOTs
         self.log(f'{stage}/loss/tot',  loss,       on_epoch=True, on_step=False)
         self.log(f'{stage}/loss/rec',  loss_rec,   on_epoch=True, on_step=False)
+        self.log(f'{stage}/loss/pde',  loss_pde,   on_epoch=True, on_step=False)
         # self.log(f'{stage}/loss/sdiv', loss_sdiv,  on_epoch=True, on_step=False)
         # self.log(f'{stage}/loss/sfn',  loss_sfn,   on_epoch=True, on_step=False)
         # self.log(f'{stage}/loss/grad', loss_grads, on_epoch=True, on_step=False)
         # self.log(f'{stage}/loss/spec', loss_spec,  on_epoch=True, on_step=False)
         # self.log(f'{stage}/loss/curl', loss_curl,  on_epoch=True, on_step=False)
-        # self.log(f'{stage}/loss/pde',  loss_pde,   on_epoch=True, on_step=False)
 
 
-        raise ValueError('Check log err spectrum')
-        self.log(f'{stage}/metrics/reconstruction', err_rec)
-        self.log(f'{stage}/metrics/angular_degree', err_ang)
-        self.log(f'{stage}/metrics/log_err_specturm', eval_metrics['log_err_specturm'])
+        # raise ValueError('Check log err spectrum')
+        # self.log(f'{stage}/metrics/reconstruction', err_rec)
+        # self.log(f'{stage}/metrics/angular_degree', err_ang)
+        # self.log(f'{stage}/metrics/log_err_specturm', eval_metrics['log_err_specturm'])
 
         return loss
 

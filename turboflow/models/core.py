@@ -73,13 +73,27 @@ class DivFree2DBasis(nn.Module):
 
 class Fourier(nn.Module):
     
-    def __init__(self, nfeat, scale):
+    def __init__(self, nfeat, scale, nvars=2):
         super().__init__()
-        self.b = nn.Parameter(torch.randn(2, nfeat)*scale, requires_grad=False)
+        self.b = nn.Parameter(torch.randn(nvars, nfeat)*scale, requires_grad=False)
 
     def forward(self, x):
         x = torch.einsum('bc,cf->bf', 2*pi*x, self.b.to(x.device))
         return torch.cat([torch.sin(x), torch.cos(x)], -1)
+
+class TimeFourier(nn.Module):
+    
+    def __init__(self, nfeat_s, scale_s, nfeat_t, scale_t):
+        super().__init__()
+        self.b_s = nn.Parameter(torch.randn(2, nfeat_s)*scale_s, requires_grad=False)
+        self.b_t = nn.Parameter(torch.randn(1, nfeat_t)*scale_t, requires_grad=False)
+
+    def forward(self, x):
+        t = x[:,:1]
+        x = x[:,1:]
+        x = torch.einsum('bc,cf->bf', 2*pi*x, self.b_s.to(x.device))
+        t = torch.einsum('bc,cf->bf', 2*pi*t, self.b_t.to(t.device))
+        return torch.cat([torch.sin(x), torch.cos(x), torch.sin(t), torch.cos(t)], -1)
 
 
 class MTL(nn.Module):

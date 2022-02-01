@@ -81,9 +81,9 @@ class Turb2DDataset(Dataset):
         tb.load_data(time_idx)
 
         # Data in Turb2D are (T,R,R,D)
-        t = tb.t
-        X = tb.xy
-        y = tb.uv
+        t = tb.t    # time var
+        X = tb.xy   # space vars
+        y = tb.uv   # target fields
 
         # normalize y
         y = y/np.max(np.abs(y))
@@ -101,10 +101,15 @@ class Turb2DDataset(Dataset):
         
             self.res = X.shape[0] 
             self.img_shape = X.shape # (R,R,2)
+            
+            self.times = 1
+            self.vars_shape_img = X.shape
+            self.fields_shape_img = y.shape
 
             self.X = torch.from_numpy(X).float().view(-1,2)
             self.y = torch.from_numpy(y).float().view(-1,2)
             self.t = float(t)
+
             self.size = self.X.shape[0]
 
         if len(X.shape) == 4: # multiple images/times
@@ -118,11 +123,14 @@ class Turb2DDataset(Dataset):
             X = np.concatenate([t, X], axis=-1)
 
             self.times = X.shape[0]
-            self.res = X.shape[1] 
+            self.img_res = X.shape[1] 
             self.img_shape = X.shape[1:3] # (R,R,2)
+            self.vars_shape_img = X.shape
+            self.fields_shape_img = y.shape
 
             self.X = torch.from_numpy(X).float().view(-1,3)
             self.y = torch.from_numpy(y).float().view(-1,2)
+
             self.size = self.X.shape[0]
 
         assert self.X.shape[0] == self.y.shape[0]
@@ -138,8 +146,9 @@ class Turb2DDataset(Dataset):
 
 class TurboFlowDataModule(pl.LightningDataModule):
     def __init__(self, dataset:str, data_dir:str, batch_size:int, time_idx:int,
-                 train_downsampling:int, val_downsampling:int, test_downsampling:int,
-                 num_workers:int):
+                 train_downsampling_space:int, val_downsampling_space:int, test_downsampling_space:int,
+                 train_downsampling_time:int,  val_downsampling_time:int,  test_downsampling_time:int,
+                 train_shuffle:bool, val_shuffle:bool, test_shuffle:bool, num_workers:int):
         super(TurboFlowDataModule, self).__init__()
 
         self.dataset = dataset
@@ -155,12 +164,15 @@ class TurboFlowDataModule(pl.LightningDataModule):
         self.data_dir = Path(data_dir)
         self.batch_size = batch_size
         self.time_idx = time_idx
-        self.train_ds = train_downsampling
-        self.val_ds = val_downsampling
-        self.test_ds = test_downsampling
-        self.train_dt = 1
-        self.val_dt = 1
-        self.test_dt = 1
+        self.train_ds = train_downsampling_space
+        self.val_ds = val_downsampling_space
+        self.test_ds = test_downsampling_space
+        self.train_dt = train_downsampling_time
+        self.val_dt = val_downsampling_time
+        self.test_dt = test_downsampling_time
+        self.train_shuffle = train_shuffle
+        self.val_shuffle = val_shuffle
+        self.test_shuffle = test_shuffle
         self.num_workers = num_workers
 
     def print(self,):
@@ -173,6 +185,9 @@ class TurboFlowDataModule(pl.LightningDataModule):
         print('train_dt', self.train_dt)
         print('val_dt', self.val_dt)
         print('test_dt', self.test_dt)
+        print('train_shuffle', self.train_shuffle)
+        print('val_shuffle', self.val_shuffle)
+        print('test_shuffle', self.test_shuffle)
         print('num_workers', self.num_workers)
 
 
@@ -181,11 +196,17 @@ class TurboFlowDataModule(pl.LightningDataModule):
         group = parent_parser.add_argument_group("data")
         group.add_argument("--dataset", type=str, required=True)
         group.add_argument("--data_dir", type=str, required=True)
-        group.add_argument("--train_downsampling", type=int, default=4)
-        group.add_argument("--val_downsampling", type=int, default=4)
-        group.add_argument("--test_downsampling", type=int, default=1)
+        group.add_argument("--train_downsampling_space", type=int, default=4)
+        group.add_argument("--val_downsampling_space", type=int, default=4)
+        group.add_argument("--test_downsampling_space", type=int, default=1)
+        group.add_argument("--train_downsampling_time", type=int, default=1)
+        group.add_argument("--val_downsampling_time", type=int, default=1)
+        group.add_argument("--test_downsampling_time", type=int, default=1)
         group.add_argument("--time_idx", type=int, default=42)
         group.add_argument("--batch_size", type=int, default=100000)
+        group.add_argument("--train_shuffle", type=bool, default=False)
+        group.add_argument("--val_shuffle", type=bool, default=False)
+        group.add_argument("--test_shuffle", type=bool, default=False)
         group.add_argument("--num_workers", type=int, default=1)
         return parent_parser
         
@@ -202,13 +223,13 @@ class TurboFlowDataModule(pl.LightningDataModule):
             self.test_dataset = self.dataset_fn(self.data_dir, self.test_ds, self.train_dt, self.time_idx)
     
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.train_dataset, self.batch_size, shuffle=self.train_shuffle, num_workers=self.num_workers)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.val_dataset, self.batch_size, shuffle=self.val_shuffle, num_workers=self.num_workers)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.test_dataset, self.batch_size, shuffle=self.test_shuffle, num_workers=self.num_workers)
 
 
 def load_turb2D_simple_numpy(path_to_turb2D:str='../data/2021-Turb2D_velocities.npy',ds:int=4,img:int=42):

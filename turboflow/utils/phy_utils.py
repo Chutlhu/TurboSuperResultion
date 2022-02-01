@@ -21,7 +21,7 @@ def _check_dim_vect(uv):
     assert uv.shape[1] == 2
 
 
-def my_grad(f:tuple, sp:tuple, indexing:str = "xy"):
+def my_grad(f:tuple, sp:tuple, indexing:str = "ij", edge_order=1):
     """
     my local computation of the gradient
     
@@ -43,7 +43,7 @@ def my_grad(f:tuple, sp:tuple, indexing:str = "xy"):
         # return [[np.gradient(f[num_dims - j - 1], sp[i], axis=i, edge_order=1) 
         #         for i in range(num_dims)] for j in range(num_dims)]
     if indexing == "ij":
-        return [[np.gradient(f[j], sp[i], axis=i, edge_order=1) 
+        return [[np.gradient(f[j], sp[i], axis=i, edge_order=edge_order) 
                 for i in range(num_dims_sp)] for j in range(num_dims_f)]
 
 
