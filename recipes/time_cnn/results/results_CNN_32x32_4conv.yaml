@@ -1,0 +1,25 @@
+best_model_path: /home/dicarlo_d/Documents/Code/TurboSuperResultion/.torch_checkpoints/Turb2D-CNN-CNN_32x32_4conv-epoch=09-val_loss=0.00.ckpt
+exp_name: CNN_32x32_4conv
+hparams:
+  do_cnn: true
+  do_divfree: false
+  do_time: true
+  lam_curl: 0
+  lam_grads: 0
+  lam_pde: 0
+  lam_sdiv: 0
+  lam_sfn: 0
+  lam_spec: 0
+  lam_weight: 1.0e-05
+  mlp_last_actfn: tanh
+  mlp_layers_dim: 128
+  mlp_layers_num: 5
+  name: CNN
+  rff_num_space: 128
+  rff_num_time: 128
+  rff_scale_space: 10
+  rff_scale_time: 10
+  sfn_min_x: 0.00390625
+  sfn_num_centers: 32
+  sfn_num_increments: 8
+  sfn_patch_dim: 16

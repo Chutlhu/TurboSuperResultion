@@ -85,6 +85,9 @@ class Turb2DDataset(Dataset):
         X = tb.xy   # space vars
         y = tb.uv   # target fields
 
+        # normalize t
+        t = t / np.max(np.abs(t))
+
         # normalize y
         y = y/np.max(np.abs(y))
         assert np.min(y) >= -1
@@ -92,6 +95,7 @@ class Turb2DDataset(Dataset):
 
         assert X.shape == y.shape
         assert len(X.shape) in [3,4]
+        tb.close()
 
         if len(X.shape) == 3: # single image/time
             
@@ -116,7 +120,8 @@ class Turb2DDataset(Dataset):
             # downsampling
             X = X[::dt, ::ds, ::ds, :]
             y = y[::dt, ::ds, ::ds, :]
-            t = t[::dt] 
+            t = t[::dt]
+
             self.t = torch.from_numpy(t).float()
             
             t = t[:, None, None, None] * np.ones((X.shape[0], X.shape[1], X.shape[2], 1))
@@ -145,7 +150,8 @@ class Turb2DDataset(Dataset):
 
 
 class TurboFlowDataModule(pl.LightningDataModule):
-    def __init__(self, dataset:str, data_dir:str, batch_size:int, time_idx:int,
+    def __init__(self, dataset:str, data_dir:str, time_idx:int,
+                 train_batch_size:int, val_batch_size:int, test_batch_size:int,
                  train_downsampling_space:int, val_downsampling_space:int, test_downsampling_space:int,
                  train_downsampling_time:int,  val_downsampling_time:int,  test_downsampling_time:int,
                  train_shuffle:bool, val_shuffle:bool, test_shuffle:bool, num_workers:int):
@@ -162,7 +168,9 @@ class TurboFlowDataModule(pl.LightningDataModule):
             self.dataset_fn = Re39000Dataset
 
         self.data_dir = Path(data_dir)
-        self.batch_size = batch_size
+        self.train_batch_size = train_batch_size
+        self.val_batch_size = val_batch_size
+        self.test_batch_size = test_batch_size
         self.time_idx = time_idx
         self.train_ds = train_downsampling_space
         self.val_ds = val_downsampling_space
@@ -203,7 +211,9 @@ class TurboFlowDataModule(pl.LightningDataModule):
         group.add_argument("--val_downsampling_time", type=int, default=1)
         group.add_argument("--test_downsampling_time", type=int, default=1)
         group.add_argument("--time_idx", type=int, default=42)
-        group.add_argument("--batch_size", type=int, default=100000)
+        group.add_argument("--train_batch_size", type=int, default=100000)
+        group.add_argument("--val_batch_size", type=int, default=100000)
+        group.add_argument("--test_batch_size", type=int, default=100000)
         group.add_argument("--train_shuffle", type=bool, default=False)
         group.add_argument("--val_shuffle", type=bool, default=False)
         group.add_argument("--test_shuffle", type=bool, default=False)
@@ -220,16 +230,16 @@ class TurboFlowDataModule(pl.LightningDataModule):
             self.val_dataset = self.dataset_fn(self.data_dir, self.val_ds, self.val_dt, self.time_idx)
 
         if stage == "test" or stage is None:
-            self.test_dataset = self.dataset_fn(self.data_dir, self.test_ds, self.train_dt, self.time_idx)
+            self.test_dataset = self.dataset_fn(self.data_dir, self.test_ds, self.test_dt, self.time_idx)
     
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, self.batch_size, shuffle=self.train_shuffle, num_workers=self.num_workers)
+        return DataLoader(self.train_dataset, self.train_batch_size, shuffle=self.train_shuffle, num_workers=self.num_workers)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, self.batch_size, shuffle=self.val_shuffle, num_workers=self.num_workers)
+        return DataLoader(self.val_dataset, self.val_batch_size, shuffle=self.val_shuffle, num_workers=self.num_workers)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, self.batch_size, shuffle=self.test_shuffle, num_workers=self.num_workers)
+        return DataLoader(self.test_dataset, self.test_batch_size, shuffle=self.test_shuffle, num_workers=self.num_workers)
 
 
 def load_turb2D_simple_numpy(path_to_turb2D:str='../data/2021-Turb2D_velocities.npy',ds:int=4,img:int=42):

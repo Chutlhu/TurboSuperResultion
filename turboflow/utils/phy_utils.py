@@ -15,6 +15,7 @@ def _check_dims_img(uv):
     assert len(res) == uv.shape[0] == 2
     assert res[0] == res[1]
 
+
 def _check_dim_vect(uv):
     # check that uv is (R*R,2)
     assert len(uv.shape) == 2
@@ -199,6 +200,7 @@ def energy_spectrum(uv):
     k_bin = torch.arange(0,len(spec))
     return spec, k_bin
 
+
 def fast_energy_spectrum(uv):
     """
     Compute energy spectrum given a velocity field
@@ -336,9 +338,11 @@ def _my_spec_grad(S):
     # compute gradient (dS = j*w*S)
     return 1j*k*S
 
+
 def fluct(uv):
     _check_dims_img(uv)
     return uv - torch.mean(uv, dim=[0,1])
+
 
 def tkenergy(uv):
     _check_dims_img(uv)

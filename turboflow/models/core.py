@@ -4,6 +4,115 @@ import torch.nn.functional as F
 
 pi = 3.14159265359
 
+class CNN(nn.Module):
+    """ A simple 5 layer CNN, configurable by passing a hyperparameter dictionary at initialization.
+        Based upon the one outlined in the Pytorch intro tutorial 
+        (http://pytorch.org/tutorials/beginner/blitz/neural_networks_tutorial.html#define-the-network)
+    """
+  
+    def __init__(self, RFFx, RFFt, hyperparam_dict=None):
+        super(CNN, self).__init__()
+        
+        if not hyperparam_dict :
+            hyperparam_dict = self.standard_hyperparams()
+        
+        self.hyperparam_dict = hyperparam_dict
+
+        self.conv1 = nn.Sequential(
+                nn.Conv2d(1, hyperparam_dict['conv1_size'], 3)
+            ,   nn.GELU()
+            ,   nn.MaxPool2d(2, 2)
+        )
+        self.conv2 =  nn.Sequential(
+                nn.Conv2d(hyperparam_dict['conv1_size'], hyperparam_dict['conv2_size'], 3)
+            ,   nn.GELU()
+            ,   nn.MaxPool2d(2, 2)
+        )
+
+        # self.conv3 = nn.Sequential(
+        #         nn.Conv2d(hyperparam_dict['conv2_size'], hyperparam_dict['conv3_size'], 3)
+        #     ,   nn.GELU()
+        #     ,   nn.MaxPool2d(2, 2)
+        # )
+        
+        # self.conv4 = nn.Sequential(
+        #         nn.Conv2d(hyperparam_dict['conv3_size'], hyperparam_dict['conv4_size'], 3)
+        #     ,   nn.GELU()
+        #     ,   nn.MaxPool2d(2, 2)
+        # )
+
+
+        self.fc1 = nn.Linear(
+            hyperparam_dict['fc1_in_size'], 
+            hyperparam_dict['fc1_out_size']
+        )
+        self.mlp = nn.Sequential(self.fc1)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        # x = self.conv3(x)
+        # x = self.conv4(x)
+        x = torch.flatten(x, start_dim=1)
+        x = torch.tanh(self.mlp(x))
+        return x
+
+    def standard_hyperparams(self):
+        hyperparam_dict = {}
+        
+        hyperparam_dict['conv1_size'] = 8
+        hyperparam_dict['conv2_size'] = 16
+        hyperparam_dict['conv3_size'] = 32
+        hyperparam_dict['conv4_size'] = 64
+
+        hyperparam_dict['fc1_in_size'] = 61504
+        hyperparam_dict['fc1_out_size'] = 256
+        
+        return hyperparam_dict
+        
+
+class SpatialGatingUnit(nn.Module):
+    def __init__(self, d_ffn, seq_len):
+        super().__init__()
+        self.norm = nn.LayerNorm(d_ffn)
+        self.spatial_proj = nn.Conv1d(seq_len, seq_len, kernel_size=1)
+        nn.init.constant_(self.spatial_proj.bias, 1.0)
+
+    def forward(self, x):
+        u, v = x.chunk(2, dim=-1)
+        # v = self.norm(v)
+        v = self.spatial_proj(v).squeeze()
+        out = u * v
+        return out
+
+
+class gMLPBlock(nn.Module):
+    def __init__(self, d_model, d_ffn, seq_len):
+        super().__init__()
+        self.norm = nn.LayerNorm(d_model, 1)
+        self.channel_proj1 = nn.Linear(d_model, d_ffn * 2)
+        self.channel_proj2 = nn.Linear(d_ffn, d_model)
+        self.sgu = SpatialGatingUnit(d_ffn, seq_len)
+
+    def forward(self, x):
+        residual = x
+        # x = self.norm(x) # norm axis = channel
+        x = F.gelu(self.channel_proj1(x))
+        x = self.sgu(x)
+        x = self.channel_proj2(x)
+        out = x + residual
+        return out
+
+class gMLP(nn.Module):
+    def __init__(self, d_model=256, d_ffn=512, seq_len=256, num_layers=6):
+        super().__init__()
+        self.model = nn.Sequential(
+            *[gMLPBlock(d_model, d_ffn, seq_len) for _ in range(num_layers)]
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
 class MLP(nn.Module):
     
     def __init__(self, dim_layers, last_activation_fun_name):
@@ -75,11 +184,25 @@ class Fourier(nn.Module):
     
     def __init__(self, nfeat, scale, nvars=2):
         super().__init__()
-        self.b = nn.Parameter(torch.randn(nvars, nfeat)*scale, requires_grad=False)
+        b = torch.randn(nvars, nfeat)*scale
+        self.b = nn.Parameter(b, requires_grad=False)
 
     def forward(self, x):
         x = torch.einsum('bc,cf->bf', 2*pi*x, self.b.to(x.device))
         return torch.cat([torch.sin(x), torch.cos(x)], -1)
+
+class Fourier2(nn.Module):
+    
+    def __init__(self, nfeat, scale, nvars=2):
+        super().__init__()
+        self.b1 = nn.Parameter(torch.randn(nvars, nfeat)*scale, requires_grad=False)
+        self.b2 = nn.Parameter(torch.randn(nvars, nfeat)*1, requires_grad=False)
+
+    def forward(self, x):
+        x1 = torch.einsum('bc,cf->bf', 2*pi*x, self.b1.to(x.device))
+        x2 = torch.einsum('bc,cf->bf', 2*pi*x, self.b2.to(x.device))
+        return torch.cat([  torch.sin(x1) * torch.sin(x2), 
+                            torch.cos(x1) * torch.cos(x2)], -1)
 
 class TimeFourier(nn.Module):
     
