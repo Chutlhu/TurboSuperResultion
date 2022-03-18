@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 pi = 3.14159265359
 
@@ -97,7 +98,8 @@ class gMLPBlock(nn.Module):
     def forward(self, x):
         residual = x
         # x = self.norm(x) # norm axis = channel
-        x = F.gelu(self.channel_proj1(x))
+        # x = F.tanh(self.channel_proj1(x))
+        x = torch.tanh(self.channel_proj1(x))
         x = self.sgu(x)
         x = self.channel_proj2(x)
         out = x + residual
@@ -113,9 +115,72 @@ class gMLP(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+
+class GaborFilter(nn.Module):
+    def __init__(self, in_dim, out_dim, alpha, beta=1.0):
+        super(GaborFilter, self).__init__()
+
+        self.mu = nn.Parameter(torch.rand((out_dim, in_dim)) * 2 - 1)
+        self.gamma = nn.Parameter(torch.distributions.gamma.Gamma(alpha, beta).sample((out_dim, )))
+        self.linear = torch.nn.Linear(in_dim, out_dim)
+
+        # Init weights
+        self.linear.weight.data *= 128. * torch.sqrt(self.gamma.unsqueeze(-1))
+        self.linear.bias.data.uniform_(-np.pi, np.pi)
+
+    def forward(self, x):
+        norm = (x ** 2).sum(dim=1).unsqueeze(-1) + (self.mu ** 2).sum(dim=1).unsqueeze(0) - 2 * x @ self.mu.T
+        return torch.exp(- self.gamma.unsqueeze(0) / 2. * norm) * torch.sin(self.linear(x))
+
+
+class FreqProj(nn.Module):
+
+    def __init__(self, nfreqs):
+        super(FreqProj, self).__init__()
+
+        freqs_1D = torch.linspace(0, 1, nfreqs)
+        self.F = nfreqs
+        self.freqs = torch.stack(torch.meshgrid([freqs_1D, freqs_1D])).flatten(start_dim=1)
+
+    def forward(self, f, x):
+        '''
+        e = B x Nout x F
+        x = B x Nin
+        '''
+        B, D = x.shape
+        norm = x @ self.freqs.to(x.device)
+        norm = norm.reshape(B, self.F, self.F)
+        f = f.reshape(B, 2, self.F, self.F, 2)
+        f = torch.view_as_complex(f)
+        u = torch.mean(f * torch.exp(1j*norm)[:,None,...], dim=[-1,-2])
+        return u.real
+
+
+class GaborNet(nn.Module):
+    def __init__(self, in_dim=2, hidden_dim=256, out_dim=1, k=4, add_last_activation=False):
+        super(GaborNet, self).__init__()
+
+        self.k = k
+        self.gabon_filters = nn.ModuleList(
+            [GaborFilter(in_dim, hidden_dim, alpha=6.0 / k) for _ in range(k)])
+        self.linear = nn.ModuleList(
+            [torch.nn.Linear(hidden_dim, hidden_dim) for _ in range(k - 1)] + [torch.nn.Linear(hidden_dim, out_dim)])
+
+        for lin in self.linear[:k - 1]:
+            lin.weight.data.uniform_(-np.sqrt(1.0 / hidden_dim), np.sqrt(1.0 / hidden_dim))
+
+    def forward(self, x):
+
+        # Recursion - Equation 3
+        zi = self.gabon_filters[0](x)  # Eq 3.a
+        for i in range(self.k - 1):
+            zi = self.linear[i](zi) * self.gabon_filters[i + 1](x)  # Eq 3.b
+
+        return self.linear[self.k - 1](zi)  # Eq 3.c
+
 class MLP(nn.Module):
     
-    def __init__(self, dim_layers, last_activation_fun_name):
+    def __init__(self, dim_layers, last_activation_fun_name, do_last_activ=True):
         super(MLP, self).__init__()
         layers = []
         num_layers = len(dim_layers)
@@ -125,7 +190,8 @@ class MLP(nn.Module):
             blocks.append(LinearTanh(dim_layers[l], dim_layers[l+1]))
             
         blocks.append(nn.Linear(dim_layers[-2], dim_layers[-1]))
-        blocks.append(self.last_activation_function(last_activation_fun_name))
+        if do_last_activ:
+            blocks.append(self.last_activation_function(last_activation_fun_name))
         self.network = nn.Sequential(*blocks)
     
     def forward(self, x):
@@ -144,6 +210,46 @@ class MLP(nn.Module):
         if fun_name == 'ELU':
             return nn.ELU()
         return None
+
+
+class SineLayer(nn.Module):
+
+    def __init__(self, w0):
+        super(SineLayer, self).__init__()
+        self.w0 = w0
+
+    def forward(self, x):
+        return torch.sin(self.w0 * x)
+
+
+class Siren(nn.Module):
+    def __init__(self, w0=30, in_dim=2, hidden_dim=256, out_dim=1):
+        super(Siren, self).__init__()
+
+        self.net = nn.Sequential(nn.Linear(in_dim, hidden_dim), SineLayer(w0),
+                                 nn.Linear(hidden_dim, hidden_dim), SineLayer(w0),
+                                 nn.Linear(hidden_dim, hidden_dim), SineLayer(w0),
+                                 nn.Linear(hidden_dim, hidden_dim), SineLayer(w0),
+                                 nn.Linear(hidden_dim, hidden_dim), SineLayer(w0),
+                                 nn.Linear(hidden_dim, out_dim))
+
+        # Init weights
+        with torch.no_grad():
+            self.net[0].weight.uniform_(-1. / in_dim, 1. / in_dim)
+            self.net[2].weight.uniform_(-np.sqrt(6. / hidden_dim) / w0,
+                                        np.sqrt(6. / hidden_dim) / w0)
+            self.net[4].weight.uniform_(-np.sqrt(6. / hidden_dim) / w0,
+                                        np.sqrt(6. / hidden_dim) / w0)
+            self.net[6].weight.uniform_(-np.sqrt(6. / hidden_dim) / w0,
+                                        np.sqrt(6. / hidden_dim) / w0)
+            self.net[8].weight.uniform_(-np.sqrt(6. / hidden_dim) / w0,
+                                        np.sqrt(6. / hidden_dim) / w0)
+            self.net[10].weight.uniform_(-np.sqrt(6. / hidden_dim) / w0,
+                                        np.sqrt(6. / hidden_dim) / w0)
+
+    def forward(self, x):
+        return self.net(x)
+
 
 
 class DivFree2DBasis(nn.Module):

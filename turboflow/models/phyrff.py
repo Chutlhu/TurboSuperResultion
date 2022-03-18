@@ -1,10 +1,12 @@
+from tracemalloc import start
+from turtle import st
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 import pytorch_lightning as pl
 
-from turboflow.models.core import LinearTanh, Fourier, Fourier2, TimeFourier, MLP, CNN, gMLP
+from turboflow.models.core import LinearTanh, Fourier, Fourier2, TimeFourier, MLP, CNN, gMLP, Siren, GaborNet, FreqProj
 from turboflow.utils import phy_utils as phy
 from turboflow.utils import torch_utils as tch
 from turboflow.utils import file_utils as fle
@@ -151,46 +153,52 @@ class plDivFreeRFFNet(pl.LightningModule):
         else:
             nvarin = 2
 
-        # regression/pinn network
         self.do_rff = True
+        self.do_cnn = do_cnn
+        self.do_divfree = do_divfree
 
         # space subnet
         self.rff_time = Fourier(rff_num_time, rff_scale_time, nvars=1)
         self.rff_space = Fourier(rff_num_space, rff_scale_space, nvars=2)
         
-        self.do_cnn = do_cnn
+        if self.do_divfree:
+            self.div = DivFree()
+            nvarout = 1
+        else:
+            nvarout = 2
+
         if self.do_cnn:
             if name == 'CNN':
                 self.cnn = CNN(rff_num_space, rff_num_time)
                 mlp_layers_dim = [256] + mlp_layers_num*[mlp_layers_dim] + [2]
                 self.mlp = MLP(mlp_layers_dim, mlp_last_actfn)
-            if name == 'SGU':
-                # mlp_layers_dim_x = [2*rff_num_space] + [128]
-                # self.mlp_x = MLP(mlp_layers_dim_x, mlp_last_actfn)
-
-                # mlp_layers_dim_t = [2*rff_num_time] + [128]
-                # self.mlp_t = MLP(mlp_layers_dim_t, mlp_last_actfn)
-
-                self.cnn = gMLP(
-                    d_model=2*rff_num_space, 
-                    d_ffn=128, 
-                    seq_len=2*rff_num_time, num_layers=3)
-                self.sgu = self.cnn
-                mlp_layers_dim = [2*rff_num_space] + mlp_layers_num*[mlp_layers_dim] + [2]
-                self.mlp = MLP(mlp_layers_dim, mlp_last_actfn)
             
         else:
-            mlp_layers_dim_x = [2*rff_num_space] + [128]
-            self.mlp_x = MLP(mlp_layers_dim_x, mlp_last_actfn)
+            if self.name == 'Siren':
+                self.mlp = Siren(w0=32, in_dim=3, hidden_dim=256, out_dim=2)
 
-            mlp_layers_dim_t = [2*rff_num_time] + [128]
-            self.mlp_t = MLP(mlp_layers_dim_t, mlp_last_actfn)
+            elif self.name == 'MFN':
+                self.mfn = GaborNet(in_dim=nvarin, hidden_dim=256, out_dim=nvarout, k=6)
 
-            mlp_layers_dim = [128] + mlp_layers_num*[mlp_layers_dim] + [16]
-            self.mlp_xt = MLP(mlp_layers_dim, mlp_last_actfn)
+            elif self.name == 'kMFN':
+                nfft = 128
+                self.nvarout = nfft
+                self.freq = FreqProj(self.nvarout)
+                self.mfn = GaborNet(in_dim=nvarin, hidden_dim=256, out_dim=2*2*self.nvarout**2, k=6)
 
-            mlp_layers_dim = [16] + [2]
-            self.mlp = MLP(mlp_layers_dim, mlp_last_actfn)
+            elif self.name == 'myMLP':
+            
+                mlp_layers_dim_x = [2*rff_num_space] + [128]
+                self.mlp_x = MLP(mlp_layers_dim_x, mlp_last_actfn)
+
+                mlp_layers_dim_t = [2*rff_num_time] + [128]
+                self.mlp_t = MLP(mlp_layers_dim_t, mlp_last_actfn)
+
+                mlp_layers_dim = [128] + mlp_layers_num*[mlp_layers_dim] + [16]
+                self.mlp_xt = MLP(mlp_layers_dim, mlp_last_actfn)
+
+                mlp_layers_dim = [16] + [2]
+                self.mlp = MLP(mlp_layers_dim, mlp_last_actfn)
     
 
         # off-grid regularization params
@@ -267,41 +275,51 @@ class plDivFreeRFFNet(pl.LightningModule):
         t = self.rff_time(x[:,:1])
         x = self.rff_space(x[:,1:])
 
+        B = xin.shape[0]
+
         if self.do_cnn:
             if self.name == 'CNN':
                 tx = torch.matmul(t[:,:,None], x[:,None,:])
                 tx = self.cnn(tx[:,None,:,:])
+                u = self.mlp(tx)
             elif self.name == 'SGU':
-                # x = self.mlp_x(x)
-                # t = self.mlp_t(t)
-                tx = torch.matmul(t[:,:,None], x[:,None,:])
-                tx = self.sgu(tx)
-                tx = torch.mean(tx, dim=1) # lum over channels
-                # xt = torch.flatten(xt, start_dim=1)
-            u = self.mlp(tx)
+                raise NotImplementedError
         else:
             if self.name == 'myMLP':
                 x = self.mlp_x(x)
                 t = self.mlp_t(t)
                 x = self.mlp_xt(x*t)
                 u = self.mlp(x)
+            
+            elif self.name == 'MFN':
+
+                if self.do_divfree:
+                    xin.requires_grad_(True)
+                    Px = self.mfn(xin)
+                    u_df = self.div(Px, xin[:,1:])
+                    return u_df, Px
+                else:
+                    x = self.mfn(xin)
+                    return x, None
+
+            elif self.name == 'kMFN':
+                    f = self.mfn(xin)
+                    # iFFT
+                    u = self.freq(f, xin[:,1:])
+
+
+            elif self.name == 'Siren':
+                u = self.mlp(xin)
+
             else:
                 x = self.mlp_x(x)
                 t = self.mlp_t(t)
                 x = self.mlp_xt(x)
                 t = self.mlp_xt(t)
                 u = self.mlp(x*t)
+
         return u, None
 
-        ## MLP
-        # if self.do_divfree:
-        #     Px = self.mlp(x)
-        #     ## DivFree
-        #     u_df = self.div(Px, xin)
-        #     return u_df, Px
-        # else:
-        #     x = self.mlp(x)
-        #     return x, None
 
     def _common_step(self, batch, batch_idx:int, stage:str):
         # It is independent of forward
@@ -322,16 +340,16 @@ class plDivFreeRFFNet(pl.LightningModule):
         loss_grads = 0
         loss_vort_ic = 0
 
-        if self.lam_sdiv > 0:
-            u, v = torch.split(y_hat, 1, -1)
-            du = tch.diff(u, X_batch)
-            u_t, u_x, u_y = du.split(1, -1)
-            dv = tch.diff(v, X_batch)
-            v_t, v_x, v_y = dv.split(1, -1)
+        # if self.lam_sdiv > 0:
+        #     u, v = torch.split(y_hat, 1, -1)
+        #     du = tch.diff(u, X_batch)
+        #     u_t, u_x, u_y = du.split(1, -1)
+        #     dv = tch.diff(v, X_batch)
+        #     v_t, v_x, v_y = dv.split(1, -1)
 
-            # Divergenge Free
-            res = u_x + v_y
-            loss_sdiv = F.mse_loss(res, torch.zeros_like(res))
+        #     # Divergenge Free
+        #     res = u_x + v_y
+        #     loss_sdiv = F.mse_loss(res, torch.zeros_like(res))
 
         # w_auto = v_x - u_y
         
@@ -401,39 +419,37 @@ class plDivFreeRFFNet(pl.LightningModule):
         #     plt.show()
 
 
-        # if self.lam_sdiv + self.lam_pde > 0:
-        #     # Navier Stokes loss (vorticity equation)
-        #     u, v = torch.split(y_hat, 1, -1)
+        if self.lam_sdiv + self.lam_pde > 0:
+            # Navier Stokes loss (vorticity equation)
+            u, v = torch.split(y_hat, 1, -1)
             
-        #     du = tch.diff(u, X_batch)
-        #     u_t, u_x, u_y = du.split(1, -1)
+            du = tch.diff(u, X_batch)
+            u_t, u_x, u_y = du.split(1, -1)
 
-        #     dv = tch.diff(v, X_batch)
-        #     v_t, v_x, v_y = dv.split(1, -1)
+            dv = tch.diff(v, X_batch)
+            v_t, v_x, v_y = dv.split(1, -1)
 
-            # w = v_x - u_y
-            # dw = tch.diff(w, X_batch)
-            # w_t, w_x, w_y = dw.split(1, -1)
-            # ddw = tch.diff(dw, X_batch)
-            # w_tt, w_xx, w_yy = ddw.split(1, -1)
+            w = v_x - u_y
+            dw = tch.diff(w, X_batch)
+            w_t, w_x, w_y = dw.split(1, -1)
+            ddw = tch.diff(dw, X_batch)
+            w_tt, w_xx, w_yy = ddw.split(1, -1)
 
-            # # spatial change of vorticity / unit volume (u dot Nabla)w
-            # w_spatial = u*w_x + v*w_y
-            # # diffusion of vorticity / univ volume (nu Laplacian w)
-            # w_diffusion = (1./3000.)*(w_xx + w_yy)
+            # spatial change of vorticity / unit volume (u dot Nabla)w
+            w_spatial = u*w_x + v*w_y
+            # diffusion of vorticity / univ volume (nu Laplacian w)
+            w_diffusion = (1./3000.)*(w_xx + w_yy)
 
-            # # full NS equation
-            # res = w_t + w_spatial + w_diffusion
-            # loss_pde = F.mse_loss(res, torch.zeros_like(res))
+            # full NS equation
+            res = w_t + w_spatial + w_diffusion
+            loss_pde = F.mse_loss(res, torch.zeros_like(res))
 
-            # res = u_x + v_y
-            # loss_sdiv = F.mse_loss(res, torch.zeros_like(res))
+            res = u_x + v_y
+            loss_sdiv = F.mse_loss(res, torch.zeros_like(res))
 
         # # Divergenge Free
         # res = u_x + v_y
         # loss_sdiv = F.mse_loss(res, torch.zeros_like(res))
-
-
 
         # # OFF GRID REGULARIZATIAN on FULL GRID
         # ## FORWAND OFFGRID
