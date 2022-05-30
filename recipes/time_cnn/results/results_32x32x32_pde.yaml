@@ -1,0 +1,25 @@
+best_model_path: /home/dicarlo_d/Documents/Code/TurboSuperResultion/.torch_checkpoints/Turb2D-MFN-32x32x32_pde-epoch=19-val_loss=0.00.ckpt
+exp_name: 32x32x32_pde
+hparams:
+  do_cnn: false
+  do_divfree: false
+  do_time: true
+  lam_curl: 0
+  lam_grads: 0
+  lam_pde: 1.0e-06
+  lam_sdiv: 0.001
+  lam_sfn: 0
+  lam_spec: 0
+  lam_weight: 1.0e-05
+  mlp_last_actfn: tanh
+  mlp_layers_dim: 32
+  mlp_layers_num: 1
+  name: MFN
+  rff_num_space: 128
+  rff_num_time: 64
+  rff_scale_space: 10
+  rff_scale_time: 1
+  sfn_min_x: 0.00390625
+  sfn_num_centers: 32
+  sfn_num_increments: 8
+  sfn_patch_dim: 16

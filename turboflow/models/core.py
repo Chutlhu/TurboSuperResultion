@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+from orthnet import Legendre
+
 pi = 3.14159265359
 
 class CNN(nn.Module):
@@ -117,7 +119,7 @@ class gMLP(nn.Module):
 
 
 class GaborFilter(nn.Module):
-    def __init__(self, in_dim, out_dim, alpha, beta=1.0):
+    def __init__(self, in_dim, out_dim, alpha, beta=1.0, max_freq=128.):
         super(GaborFilter, self).__init__()
 
         self.mu = nn.Parameter(torch.rand((out_dim, in_dim)) * 2 - 1)
@@ -125,7 +127,7 @@ class GaborFilter(nn.Module):
         self.linear = torch.nn.Linear(in_dim, out_dim)
 
         # Init weights
-        self.linear.weight.data *= 128. * torch.sqrt(self.gamma.unsqueeze(-1))
+        self.linear.weight.data *= max_freq * torch.sqrt(self.gamma.unsqueeze(-1))
         self.linear.bias.data.uniform_(-np.pi, np.pi)
 
     def forward(self, x):
@@ -133,36 +135,110 @@ class GaborFilter(nn.Module):
         return torch.exp(- self.gamma.unsqueeze(0) / 2. * norm) * torch.sin(self.linear(x))
 
 
+class FourierFilter(nn.Module):
+    def __init__(self, in_dim, out_dim, alpha, beta=2.0, bias=True, max_freq=128.):
+        super(FourierFilter, self).__init__()
+
+        self.gamma = nn.Parameter(torch.distributions.gamma.Gamma(alpha, beta).sample((out_dim, )))
+        self.linear = torch.nn.Linear(in_dim, out_dim, bias=bias)
+
+        # Init weights
+        self.linear.weight.data *= max_freq * torch.sqrt(self.gamma.unsqueeze(-1))
+        self.linear.bias.data.uniform_(-np.pi, np.pi)
+
+    def forward(self, x):
+        return torch.sin(self.linear(x))
+
+
 class FreqProj(nn.Module):
 
-    def __init__(self, nfreqs):
+    def __init__(self, nrfft):
         super(FreqProj, self).__init__()
 
-        freqs_1D = torch.linspace(0, 1, nfreqs)
-        self.F = nfreqs
+        freqs_1D = torch.linspace(0,1,nrfft).float()
+        self.F = nrfft
+        self.k = torch.stack(torch.meshgrid([freqs_1D, freqs_1D])).flatten(start_dim=1)
+        # coeff = torch.randn(2,nrfft,nrfft,2)
+        # self.coeff = nn.Parameter(coeff)
+
+    def forward(self, f, x, t):
+        '''
+        f = B x Nout x F (= 2 x 2 x F^2)
+        x = B x Nin
+        '''
+        B, D = x.shape
+
+        k = self.k.to(x.device)
+        norm = x @ k # X x K
+        D = torch.exp(1j*2*pi*norm / self.F)
+        # D = torch.linalg.pinv(D.T)  # X x K
+
+        f = f.reshape(B, 2, self.F*self.F, 2) 
+        f = torch.view_as_complex(f)
+        # val = torch.unique(t)
+        # for v in val:
+        #     mask = t == v
+        #     f[mask,:,:] = torch.mean(f[mask,:,:], dim=0) # B x 2 x KK
+            
+        u = torch.mean(f * D[:,None,:], dim=-1)
+        return u.real
+        
+
+class OrthoPoly(nn.Module):
+    def __init__(self, degree):
+        super(OrthoPoly, self).__init__()
+
+        self.degree = degree
+        self.legendre = lambda x : Legendre(x, degree)
+        self.linear = nn.Linear(1)
+
+    def forward(self, x):
+        '''
+        x = B x Nin
+        '''
+        x = self.legendre(x).tensor # B x Nin -> B x D
+        return x
+
+
+class iFreqProj(nn.Module):
+    def __init__(self, nrfft):
+        super(iFreqProj, self).__init__()
+
+        freqs_1D = torch.arange(nrfft)
+        self.F = nrfft
         self.freqs = torch.stack(torch.meshgrid([freqs_1D, freqs_1D])).flatten(start_dim=1)
 
     def forward(self, f, x):
         '''
-        e = B x Nout x F
+        f = B x Nout x F (= 2 x 2 x F^2)
         x = B x Nin
         '''
         B, D = x.shape
+        x = x * self.F
+
         norm = x @ self.freqs.to(x.device)
-        norm = norm.reshape(B, self.F, self.F)
+        norm = norm.reshape(B, self.F, self.F)  # B x F x F
+
         f = f.reshape(B, 2, self.F, self.F, 2)
-        f = torch.view_as_complex(f)
-        u = torch.mean(f * torch.exp(1j*norm)[:,None,...], dim=[-1,-2])
+        f = torch.mean(f, dim=0)
+        f = torch.view_as_complex(f)            # B x 2 x F x F
+        
+        u = torch.mean(f[None,...] * torch.exp(1j*2*pi*norm / self.F)[:,None,...], dim=[-1,-2]) # B x 2
         return u.real
 
 
-class GaborNet(nn.Module):
-    def __init__(self, in_dim=2, hidden_dim=256, out_dim=1, k=4, add_last_activation=False):
-        super(GaborNet, self).__init__()
+class MFN(nn.Module):
+    def __init__(self, in_dim=2, hidden_dim=256, out_dim=1, k=4, filter_fun='Gabor', data_max_freq=128):
+        super(MFN, self).__init__()
+
+        if filter_fun == 'Gabor':
+            filter_fun = GaborFilter
+        else:
+            filter_fun = FourierFilter
 
         self.k = k
-        self.gabon_filters = nn.ModuleList(
-            [GaborFilter(in_dim, hidden_dim, alpha=6.0 / k) for _ in range(k)])
+        self.filters = nn.ModuleList(
+            [filter_fun(in_dim, hidden_dim, alpha=6.0 / k, max_freq=data_max_freq) for _ in range(k)])
         self.linear = nn.ModuleList(
             [torch.nn.Linear(hidden_dim, hidden_dim) for _ in range(k - 1)] + [torch.nn.Linear(hidden_dim, out_dim)])
 
@@ -170,13 +246,12 @@ class GaborNet(nn.Module):
             lin.weight.data.uniform_(-np.sqrt(1.0 / hidden_dim), np.sqrt(1.0 / hidden_dim))
 
     def forward(self, x):
-
         # Recursion - Equation 3
-        zi = self.gabon_filters[0](x)  # Eq 3.a
+        zi = self.filters[0](x)  # Eq 3.a
         for i in range(self.k - 1):
-            zi = self.linear[i](zi) * self.gabon_filters[i + 1](x)  # Eq 3.b
-
-        return self.linear[self.k - 1](zi)  # Eq 3.c
+            zi = self.linear[i](zi) * self.filters[i + 1](x)  # Eq 3.b
+        x = self.linear[self.k - 1](zi)  # Eq 3.c
+        return x
 
 class MLP(nn.Module):
     

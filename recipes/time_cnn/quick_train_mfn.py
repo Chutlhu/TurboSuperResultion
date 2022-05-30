@@ -19,7 +19,6 @@ data_dir = Path('/','home','dicarlo_d','Documents','Datasets','Turb2D.hdf5')
 fig_path = base_dir / Path('figures')
 res_path = base_dir / Path('results')
 
-exp_suffix = 'SGU_32x32x32_gabor_freqs_spect'
 # train
 batch_size = {
     'train' : 256
@@ -31,17 +30,20 @@ dx = {
 }
 dt = {
     'train' : 8 
-,   'val'   : 4
+,   'val'   : 8
 }
-nt_train = 32
+nt_train = 1
 
-run = 'kMFN'
+
+run = 'MFN'
 
 model = {
-    'name' : 'kMFN' # 'RFFMLP
+    'name' : run # 'RFFMLP
 ,   'cnn' : False
-,   'do_divfree' : True
+,   'do_divfree' : False
 }
+
+exp_suffix = f'{nt_train}x32x32_gabor'
 
 n_epoch = 5000
 seed = 666
@@ -57,12 +59,12 @@ hparams = {
     'rff_num_time': 64, 
     'rff_scale_time': 1,
     'do_divfree': model['do_divfree'],
-    'lam_sdiv': 0, 
+    'lam_sdiv': 1e-3, 
     'lam_sfn':  0,    
     'lam_spec': 0,    
     'lam_grads':0,    
     'lam_curl' :0,    
-    'lam_pde' : 0,
+    'lam_pde' : 1e-6,
     'lam_weight': 1e-5,  # L2 reg on the NN's weights
     'sfn_min_x': 1./256., # maximal resolution
     'sfn_num_centers': 32,
@@ -130,8 +132,10 @@ def main():
 
     trainer.fit(model, dm_train)
 
-    print('Path to best model', checkpoint_callback.best_model_path)
     best_model_path = checkpoint_callback.best_model_path
+    best_model_score = checkpoint_callback.best_model_score
+    print('Path to best model', best_model_path)
+    print('Best score', best_model_score)
     
     del dm_train
     del dataset

@@ -86,7 +86,7 @@ class Turb2DDataset(Dataset):
         y = tb.uv   # target fields
 
         # normalize t
-        t = t / np.max(np.abs(t))
+        # t = t / np.max(np.abs(t))
 
         # normalize y
         y = y/np.max(np.abs(y))
