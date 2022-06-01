@@ -5,12 +5,15 @@ import numpy as np
 from pathlib import  Path
 
 from natsort import natsorted
-from torch.utils import data
 
 from turboflow.datasets.turb2D import Turb2D
+from turboflow.utils import file_utils as fle
+from turboflow.utils import dsp_utils as dsp
+
 
 import pytorch_lightning as pl
 from torch.utils.data import Dataset, DataLoader
+
 
 currently_supported_dataset = ['Turb2D', 'Re39000']
 
@@ -75,7 +78,9 @@ class Turb2DDataset(Dataset):
     - u : (N, uv) -> (1000x256x256, 2)
     """
 
-    def __init__(self,data_dir:str=None,ds:int=1,dt:int=1,time_idx:int=None):
+    def __init__(self,
+                data_dir:str=None, ds:int=1, dt:int=1, time_idx:int=None, 
+                do_offgrid:bool=False, ppp:float=1.):
 
         tb = Turb2D(data_dir)
         tb.load_data(time_idx)
@@ -96,16 +101,42 @@ class Turb2DDataset(Dataset):
         if len(X.shape) == 3: # single image/time
             
             # downsampling
-            X = X[::ds, ::ds, :]
-            y = y[::ds, ::ds, :]
-        
-            self.res = X.shape[0] 
-            self.img_shape = X.shape # (R,R,2)
+            if do_offgrid:
+                u_smp, xy_smp = dsp.interpolate2D_mesh01x01(X, y[:,:,0], scale=2)
+                v_smp, xy_smp = dsp.interpolate2D_mesh01x01(X, y[:,:,1], scale=2)
+                xy_smp = np.stack([xy_smp[:,:,1], xy_smp[:,:,0]], axis=-1)
+                uv_smp = np.stack([u_smp, v_smp], axis=-1)
+
+                R_smp = uv_smp.shape[0]
+                xy_smp = xy_smp.reshape(R_smp**2, 2)
+                uv_smp = uv_smp.reshape(R_smp**2, 2)
+
+                uv_smp = uv_smp/np.max(np.abs(uv_smp))
+
+                max_res = R_smp
+
+                # subsample for TEST
+                N = int((max_res**2) * ppp)
+                rnd_idx = np.random.randint(0, R_smp**2, size=N)
+                
+                X = xy_smp[rnd_idx,:]
+                y = uv_smp[rnd_idx,:]
+
+            else:
+
+                X = X[::ds, ::ds, :]
+                y = y[::ds, ::ds, :]
+            
+                self.res = X.shape[0] 
+                self.img_shape = X.shape # (R,R,2)
 
             self.X = torch.from_numpy(X).float().view(-1,2)
             self.y = torch.from_numpy(y).float().view(-1,2)
             self.t = float(t)
             self.size = self.X.shape[0]
+
+            print(self.X.shape)
+            print(self.y.shape)
 
         if len(X.shape) == 4: # multiple images/times
             # downsampling
@@ -137,6 +168,8 @@ class Turb2DDataset(Dataset):
 class TurboFlowDataModule(pl.LightningDataModule):
     def __init__(self, dataset:str, data_dir:str, batch_size:int, time_idx:int,
                  train_downsampling:int, val_downsampling:int, test_downsampling:int,
+                 train_do_offgrid:bool, val_do_offgrid:bool, test_do_offgrid:bool,
+                 train_ppp:bool, val_ppp:bool, test_ppp:bool,
                  num_workers:int):
         super(TurboFlowDataModule, self).__init__()
 
@@ -153,6 +186,14 @@ class TurboFlowDataModule(pl.LightningDataModule):
         self.data_dir = Path(data_dir)
         self.batch_size = batch_size
         self.time_idx = time_idx
+
+
+        self.train_do_offgrid = train_do_offgrid
+        self.val_do_offgrid = val_do_offgrid
+        self.test_do_offgrid = test_do_offgrid
+        self.train_ppp = train_ppp
+        self.val_ppp = val_ppp
+        self.test_ppp = test_ppp
         self.train_ds = train_downsampling
         self.val_ds = val_downsampling
         self.test_ds = test_downsampling
@@ -179,11 +220,17 @@ class TurboFlowDataModule(pl.LightningDataModule):
         group = parent_parser.add_argument_group("data")
         group.add_argument("--dataset", type=str, required=True)
         group.add_argument("--data_dir", type=str, required=True)
+        group.add_argument("--train_do_offgrid", type=fle.str2bool, nargs='?', const=True, default=False)
+        group.add_argument("--val_do_offgrid",   type=fle.str2bool, nargs='?', const=True, default=False)
+        group.add_argument("--test_do_offgrid",  type=fle.str2bool, nargs='?', const=True, default=False)
+        group.add_argument("--train_ppp", type=float, default=1.)
+        group.add_argument("--val_ppp",   type=float, default=1.)
+        group.add_argument("--test_ppp",  type=float, default=1.)
         group.add_argument("--train_downsampling", type=int, default=4)
         group.add_argument("--val_downsampling", type=int, default=4)
         group.add_argument("--test_downsampling", type=int, default=1)
         group.add_argument("--time_idx", type=int, default=42)
-        group.add_argument("--batch_size", type=int, default=100000)
+        group.add_argument("--batch_size", type=int, default=256)
         group.add_argument("--num_workers", type=int, default=1)
         return parent_parser
         
@@ -193,20 +240,20 @@ class TurboFlowDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
-            self.train_dataset = self.dataset_fn(self.data_dir, self.train_ds, self.train_dt, self.time_idx)
-            self.val_dataset = self.dataset_fn(self.data_dir, self.val_ds, self.val_dt, self.time_idx)
+            self.train_dataset = self.dataset_fn(self.data_dir, self.train_ds, self.train_dt, self.time_idx, self.train_do_offgrid, self.train_ppp)
+            self.val_dataset = self.dataset_fn(self.data_dir,   self.val_ds,   self.val_dt,   self.time_idx, self.val_do_offgrid, self.val_ppp)
 
         if stage == "test" or stage is None:
-            self.test_dataset = self.dataset_fn(self.data_dir, self.test_ds, self.train_dt, self.time_idx)
+            self.test_dataset = self.dataset_fn(self.data_dir, self.test_ds, self.train_dt, self.time_idx,  self.test_do_offgrid, self.test_ppp)
     
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.train_dataset, self.batch_size, num_workers=self.num_workers, shuffle=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.val_dataset, self.batch_size, num_workers=self.num_workers, shuffle=False)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.test_dataset, self.batch_size, num_workers=self.num_workers, shuffle=False)
 
 
 def load_turb2D_simple_numpy(path_to_turb2D:str='../data/2021-Turb2D_velocities.npy',ds:int=4,img:int=42):
