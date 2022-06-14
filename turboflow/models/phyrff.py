@@ -158,9 +158,9 @@ class plDivFreeRFFNet(pl.LightningModule):
         self.do_cnn = do_cnn
         self.do_divfree = do_divfree
 
-        # space subnet
-        self.rff_time = Fourier(rff_num_time, rff_scale_time, nvars=1)
-        self.rff_space = Fourier(rff_num_space, rff_scale_space, nvars=2)
+        # # space subnet
+        # self.rff_time = Fourier(rff_num_time, rff_scale_time, nvars=1)
+        # self.rff_space = Fourier(rff_num_space, rff_scale_space, nvars=2)
         
         if self.do_divfree:
             self.div = DivFree()
@@ -180,7 +180,12 @@ class plDivFreeRFFNet(pl.LightningModule):
 
             elif self.name == 'MFN':
                 filter_fun = 'Gabor'
-                self.mfn = MFN(in_dim=1, hidden_dim=256, out_dim=1, k=1, filter_fun=filter_fun)
+                self.mfn = MFN(in_dim=3, hidden_dim=mlp_layers_num, out_dim=2, k=mlp_layers_num, filter_fun=filter_fun)
+
+            elif self.name == 'moMFN':
+                filter_fun = 'Gabor'
+                self.mfn = moMFN(in_dim=3, hidden_dim=mlp_layers_dim, out_dim=2, k=mlp_layers_num, 
+                                 filter_fun=filter_fun, data_max_freqs=[64, 128, 256, 512][:mlp_layers_num])
 
             elif self.name == 'kMFN':
                 nfft = 128
@@ -218,8 +223,8 @@ class plDivFreeRFFNet(pl.LightningModule):
         self.sfun_eps = 1e-20
         # self.spec_model = torch.load(root_dir + 'data/hr_spect256.pt')
         
-        self.sp_grad = SpatialGradient(mode='diff', order=1, normalized=True)
-        self.sp_lapl = Laplacian(kernel_size=5, normalized=True)
+        # self.sp_grad = SpatialGradient(mode='diff', order=1, normalized=True)
+        # self.sp_lapl = Laplacian(kernel_size=5, normalized=True)
 
         self.Re = 3000
         
@@ -343,6 +348,20 @@ class plDivFreeRFFNet(pl.LightningModule):
             elif self.name == 'Siren':
                 u = self.mlp(xin)
 
+            elif self.name == 'moMFN':
+                
+                if self.do_divfree:
+                    xin.requires_grad_(True)
+                    P, _ = self.mfn(xin)
+                    P_txy = tch.diff(P, xin)
+                    u_df = torch.cat(
+                        [P_txy[:,-1,None], 
+                        -P_txy[:,-2,None]], dim=-1)
+
+                    return u_df, P_txy
+                else:
+                    u, ys = self.mfn(x)
+
             else:
                 x = self.mlp_x(x)
                 t = self.mlp_t(t)
@@ -350,7 +369,7 @@ class plDivFreeRFFNet(pl.LightningModule):
                 t = self.mlp_xt(t)
                 u = self.mlp(x*t)
 
-        return u, None
+        return u, ys
 
 
     def _common_step(self, batch, batch_idx:int, stage:str):
@@ -361,70 +380,85 @@ class plDivFreeRFFNet(pl.LightningModule):
         H = self.H
 
         ## FORWARD BATCH
-        y_hat, Py_hat = self.forward(X_batch)
+        y_hat, y_s = self.forward(X_batch)
 
         ## REGULARIZATION and LOSSES
         # Reconstruction loss
-        loss_rec = F.mse_loss(y_hat, y_batch)
+        loss_rec = F.mse_loss(y_hat, y_batch[:,:2])
+
+        u, v = torch.split(y_hat, 1, -1)
+        du = tch.diff(u, X_batch)
+        u_t, u_x, u_y = du.split(1, -1)
+
+        dv = tch.diff(v, X_batch)
+        v_t, v_x, v_y = dv.split(1, -1)
+
+        w_pred = v_x - u_y
+        loss_curl = F.mse_loss(w_pred, y_batch[:,2:])
         
         # res_rec = torch.abs(y_hat - y_batch)**2
-        # idx = torch.argsort(X_batch[:,0])
-        # res_sort = res_rec[idx]
+        # idx = torch.argsort(X_batch[:,0]) # sort according to time
+        # res_sorted = res_rec[idx]
         # tol = 1e-2
         # W = torch.triu(torch.ones(B,B).to(X_batch.device), diagonal=1).T
-        # w = torch.exp(- tol * (torch.matmul(W, res_sort)))
-        # res_rec = w*res_rec
+        # w = torch.exp(- tol * (torch.matmul(W, res_sorted)))
+        # res_rec = w*res_sorted
         # loss_rec = F.mse_loss(res_rec, torch.zeros_like(res_rec))
 
         # ## OFF-GRID PDE
         loss_pde = 0
         loss_sdiv = 0
+
         # X_off_hr = torch.rand([B, 3]).to(X_batch.device)
-        # X_off_hr[:,0] = 2*X_off_hr[:,0] # t \in [0,2],  x,y \in [0,1]
+        # X_off_hr[:,0] = 2*X_off_hr[:,0]     # t \in [0,2]
+        # X_off_hr[:,1] = 2*X_off_hr[:,1] - 1 # x,y \in [-1,1]
+        # X_off_hr[:,2] = 2*X_off_hr[:,2] - 1 # x,y \in [-1,1]
         # y_off_hr, _ = self.forward(X_off_hr)
         # W = torch.triu(torch.ones(B,B).to(X_batch.device), diagonal=1).T
+        X_off_hr = X_batch
+        y_off_hr, _ = self.forward(X_off_hr)
 
-        # if self.lam_sdiv + self.lam_pde > 0:
-        #     # Navier Stokes loss (vorticity equation)
-        #     u, v = torch.split(y_off_hr, 1, -1)
+        if self.lam_sdiv + self.lam_pde > 0:
+            # Navier Stokes loss (vorticity equation)
+            u, v = torch.split(y_off_hr, 1, -1)
             
-        #     du = tch.diff(u, X_off_hr)
-        #     u_t, u_x, u_y = du.split(1, -1)
+            du = tch.diff(u, X_off_hr)
+            u_t, u_x, u_y = du.split(1, -1)
 
-        #     dv = tch.diff(v, X_off_hr)
-        #     v_t, v_x, v_y = dv.split(1, -1)
+            dv = tch.diff(v, X_off_hr)
+            v_t, v_x, v_y = dv.split(1, -1)
 
-        #     w = v_x - u_y
-        #     dw = tch.diff(w, X_off_hr)
-        #     w_t, w_x, w_y = dw.split(1, -1)
-        #     ddw = tch.diff(dw, X_off_hr)
-        #     w_tt, w_xx, w_yy = ddw.split(1, -1)
+            w = v_x - u_y
 
-        #     # spatial change of vorticity / unit volume (u dot Nabla)w
-        #     w_spatial = u*w_x + v*w_y
-        #     # diffusion of vorticity / univ volume (nu Laplacian w)
-        #     w_diffusion = (1./self.Re)*(w_xx + w_yy)
+            dw = tch.diff(w, X_off_hr)
+            w_t, w_x, w_y = dw.split(1, -1)
+            ddw = tch.diff(dw, X_off_hr)
+            w_tt, w_xx, w_yy = ddw.split(1, -1)
 
-        #     # full NS equation
-        #     res = torch.abs(w_t + w_spatial + w_diffusion)**2
+            # spatial change of vorticity / unit volume (u dot Nabla)w
+            w_spatial = u*w_x + v*w_y
+            # diffusion of vorticity / univ volume (nu Laplacian w)
+            diffusion = 0 # 1/self.Re
+            w_diffusion = diffusion*(w_xx + w_yy)
 
-        #     # causal training
-        #     idx = torch.argsort(X_off_hr[:,0])
-        #     res_sort = res[idx]
-        #     tol = 1e-2
+            # full NS equation
+            res_pde = torch.abs(w_t + w_spatial + w_diffusion)**2
 
-        #     w = torch.exp(- tol * (torch.matmul(W, res_sort)))
+            # causal training
+            # idx = torch.argsort(X_off_hr[:,0])
+            # res_sort = res[idx]
+            # tol = 1e-2
+            # w = torch.exp(- tol * (torch.matmul(W, res_sort)))
+            # res = w * res_sort
 
-        #     res = w * res_sort
-
-        #     loss_pde = F.mse_loss(res, torch.zeros_like(res))
-
-        #     res = u_x + v_y
-        #     loss_sdiv = F.mse_loss(res, torch.zeros_like(res))
-
-        # # Divergenge Free
-        # res = u_x + v_y
-        # loss_sdiv = F.mse_loss(res, torch.zeros_like(res))
+            loss_pde = F.mse_loss(res_pde, torch.zeros_like(res_pde))
+            
+            res_sdiv = u_x + v_y
+            loss_sdiv = F.mse_loss(res_sdiv, torch.zeros_like(res_sdiv))
+            
+            # if batch_idx%30 == 0:
+            #     print('PDE', loss_pde.item())
+            #     print('SDV', loss_sdiv.item())
 
         # # OFF GRID REGULARIZATIAN on FULL GRID
         # ## FORWAND OFFGRID
@@ -564,11 +598,12 @@ class plDivFreeRFFNet(pl.LightningModule):
             # del X_incr
             # del patch_sq
 
-        loss = loss_rec + self.lam_pde * loss_pde + self.lam_sdiv * loss_sdiv
+        loss = loss_rec + self.lam_pde * loss_pde + self.lam_sdiv * loss_sdiv + self.lam_curl * loss_curl
         
         # LOGs, PRINTs and PLOTs
         self.log(f'{stage}/loss/tot',  loss,       on_epoch=True, on_step=False)
         self.log(f'{stage}/loss/rec',  loss_rec,   on_epoch=True, on_step=False)
+        self.log(f'{stage}/loss/curl', loss_curl,  on_epoch=True, on_step=False)
         self.log(f'{stage}/loss/pde',  loss_pde,   on_epoch=True, on_step=False)
         self.log(f'{stage}/loss/sdiv', loss_sdiv,  on_epoch=True, on_step=False)
         # self.log(f'{stage}/loss/loss_vort_ic', loss_vort_ic,  on_epoch=True, on_step=False)
@@ -646,7 +681,7 @@ class plDivFreeRFFNet(pl.LightningModule):
         pass
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.lam_weight)
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-2, weight_decay=self.lam_weight)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, )
         # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.9)
         return {"optimizer": optimizer, 

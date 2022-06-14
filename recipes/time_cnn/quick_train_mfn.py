@@ -34,7 +34,6 @@ dt = {
 }
 nt_train = 1
 
-
 run = 'MFN'
 
 model = {

@@ -157,6 +157,8 @@ class TurboFlowDataModule(pl.LightningDataModule):
                  train_shuffle:bool, val_shuffle:bool, test_shuffle:bool, num_workers:int):
         super(TurboFlowDataModule, self).__init__()
 
+        raise ValueError('Deprecated. Use Kolmopy')
+
         self.dataset = dataset
 
         if not self.dataset in currently_supported_dataset:

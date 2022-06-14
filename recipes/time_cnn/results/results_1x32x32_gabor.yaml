@@ -1,4 +1,4 @@
-best_model_path: /home/dicarlo_d/Documents/Code/TurboSuperResultion/.torch_checkpoints/Turb2D-MFN-1x32x32_gabor-epoch=39-val_loss=0.00-v1.ckpt
+best_model_path: ''
 exp_name: 1x32x32_gabor
 hparams:
   do_cnn: false

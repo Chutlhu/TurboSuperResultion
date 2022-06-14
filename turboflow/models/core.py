@@ -107,6 +107,7 @@ class gMLPBlock(nn.Module):
         out = x + residual
         return out
 
+
 class gMLP(nn.Module):
     def __init__(self, d_model=256, d_ffn=512, seq_len=256, num_layers=6):
         super().__init__()
@@ -124,10 +125,14 @@ class GaborFilter(nn.Module):
 
         self.mu = nn.Parameter(torch.rand((out_dim, in_dim)) * 2 - 1)
         self.gamma = nn.Parameter(torch.distributions.gamma.Gamma(alpha, beta).sample((out_dim, )))
+        # self.gamma1 = nn.Parameter(torch.distributions.uniform.Uniform(-1, 1).sample((out_dim, in_dim)))
+        # self.gamma2 = nn.Parameter(torch.distributions.normal.Normal(0, 1).sample((out_dim, in_dim)))
         self.linear = torch.nn.Linear(in_dim, out_dim)
 
         # Init weights
         self.linear.weight.data *= max_freq * torch.sqrt(self.gamma.unsqueeze(-1))
+        # self.linear.weight.data = max_freq * self.gamma1
+        # self.linear.weight.data = max_freq * self.gamma2
         self.linear.bias.data.uniform_(-np.pi, np.pi)
 
     def forward(self, x):
@@ -243,7 +248,7 @@ class MFN(nn.Module):
             [torch.nn.Linear(hidden_dim, hidden_dim) for _ in range(k - 1)] + [torch.nn.Linear(hidden_dim, out_dim)])
 
         for lin in self.linear[:k - 1]:
-            lin.weight.data.uniform_(-np.sqrt(1.0 / hidden_dim), np.sqrt(1.0 / hidden_dim))
+            lin.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
 
     def forward(self, x):
         # Recursion - Equation 3
@@ -497,3 +502,40 @@ def montecarlo_sampling_xcenters_xincerments(n_points, n_increments, n_neighbour
         traslated_points[l,:,:,1] = min_l*l*torch.sin(2*pi*random_direction) + random_points[None,:,1]
 
     return traslated_points
+
+
+class moMFN(nn.Module):
+    def __init__(self, in_dim=2, hidden_dim=256, out_dim=1, k=4, filter_fun='Gabor', data_max_freqs=128):
+        super(moMFN, self).__init__()
+
+        if filter_fun == 'Gabor':
+            filter_fun = GaborFilter
+        else:
+            filter_fun = FourierFilter
+
+        self.k = k
+        self.filters = nn.ModuleList(
+            [filter_fun(in_dim, hidden_dim, alpha=6.0 / k, max_freq=data_max_freqs[i]) for i in range(k)])
+        self.linear = nn.ModuleList(
+            [torch.nn.Linear(hidden_dim, hidden_dim) for _ in range(k - 1)] + [torch.nn.Linear(hidden_dim, out_dim)])
+        
+        # self.mid_linear = nn.ModuleList(
+        #     [torch.nn.Linear(hidden_dim, out_dim) for _ in range(k - 1)])
+
+        for lin in self.linear[:k - 1]:
+            lin.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+        self.linear[-1].weight.data.uniform_(-1,1)
+        # for lin in self.noise_filters[:k - 1]:
+        #     lin.weight.data.constant_(1.)
+
+    def forward(self, x):
+        # Recursion - Equation 3
+        zi = self.filters[0](x)  # Eq 3.a
+        yi = 0
+        for i in range(self.k - 1):
+            zi = self.linear[i](zi) * self.filters[i + 1](x)  # Eq 3.b
+            # yi += self.mid_linear[i](zi)
+
+        x = self.linear[self.k - 1](zi)  # Eq 3.c
+        
+        return x, None
