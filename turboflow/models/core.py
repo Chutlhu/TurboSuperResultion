@@ -1,3 +1,4 @@
+from turtle import forward
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -117,27 +118,6 @@ class gMLP(nn.Module):
 
     def forward(self, x):
         return self.model(x)
-
-
-class GaborFilter(nn.Module):
-    def __init__(self, in_dim, out_dim, alpha, beta=1.0, max_freq=128.):
-        super(GaborFilter, self).__init__()
-
-        self.mu = nn.Parameter(torch.rand((out_dim, in_dim)) * 2 - 1)
-        self.gamma = nn.Parameter(torch.distributions.gamma.Gamma(alpha, beta).sample((out_dim, )))
-        # self.gamma1 = nn.Parameter(torch.distributions.uniform.Uniform(-1, 1).sample((out_dim, in_dim)))
-        # self.gamma2 = nn.Parameter(torch.distributions.normal.Normal(0, 1).sample((out_dim, in_dim)))
-        self.linear = torch.nn.Linear(in_dim, out_dim)
-
-        # Init weights
-        self.linear.weight.data *= max_freq * torch.sqrt(self.gamma.unsqueeze(-1))
-        # self.linear.weight.data = max_freq * self.gamma1
-        # self.linear.weight.data = max_freq * self.gamma2
-        self.linear.bias.data.uniform_(-np.pi, np.pi)
-
-    def forward(self, x):
-        norm = (x ** 2).sum(dim=1).unsqueeze(-1) + (self.mu ** 2).sum(dim=1).unsqueeze(0) - 2 * x @ self.mu.T
-        return torch.exp(- self.gamma.unsqueeze(0) / 2. * norm) * torch.sin(self.linear(x))
 
 
 class FourierFilter(nn.Module):
@@ -504,38 +484,177 @@ def montecarlo_sampling_xcenters_xincerments(n_points, n_increments, n_neighbour
     return traslated_points
 
 
-class moMFN(nn.Module):
-    def __init__(self, in_dim=2, hidden_dim=256, out_dim=1, k=4, filter_fun='Gabor', data_max_freqs=128):
-        super(moMFN, self).__init__()
+class GaborFilter(nn.Module):
+    def __init__(self, in_dim, out_dim, alpha, beta=1.0, freq_range=[0,256]):
+        super(GaborFilter, self).__init__()
 
-        if filter_fun == 'Gabor':
-            filter_fun = GaborFilter
-        else:
-            filter_fun = FourierFilter
+        self.mu = nn.Parameter(torch.rand((out_dim, in_dim)) * 2 - 1)
+        self.gamma = nn.Parameter(torch.distributions.gamma.Gamma(alpha, beta).sample((out_dim, )))
+        self.gamma1 = nn.Parameter(torch.distributions.uniform.Uniform(freq_range[0], freq_range[1]).sample((out_dim, in_dim)))
+        self.perm1 = torch.randint(-1,1,(out_dim,in_dim))
+        # self.gamma2 = nn.Parameter(torch.distributions.normal.Normal(0, 1).sample((out_dim, in_dim)))
+        self.linear = torch.nn.Linear(in_dim, out_dim)
 
-        self.k = k
-        self.filters = nn.ModuleList(
-            [filter_fun(in_dim, hidden_dim, alpha=6.0 / k, max_freq=data_max_freqs[i]) for i in range(k)])
-        self.linear = nn.ModuleList(
-            [torch.nn.Linear(hidden_dim, hidden_dim) for _ in range(k - 1)] + [torch.nn.Linear(hidden_dim, out_dim)])
-        
-        # self.mid_linear = nn.ModuleList(
-        #     [torch.nn.Linear(hidden_dim, out_dim) for _ in range(k - 1)])
-
-        for lin in self.linear[:k - 1]:
-            lin.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
-        self.linear[-1].weight.data.uniform_(-1,1)
-        # for lin in self.noise_filters[:k - 1]:
-        #     lin.weight.data.constant_(1.)
+        # Init weights
+        # self.linear.weight.data *= max_freq * torch.sqrt(self.gamma.unsqueeze(-1))
+        self.linear.weight.data.apply_(self.gamma1)
+        # self.linear.weight.data = max_freq * self.gamma2
+        self.linear.bias.data.uniform_(-np.pi, np.pi)
 
     def forward(self, x):
-        # Recursion - Equation 3
-        zi = self.filters[0](x)  # Eq 3.a
-        yi = 0
-        for i in range(self.k - 1):
-            zi = self.linear[i](zi) * self.filters[i + 1](x)  # Eq 3.b
-            # yi += self.mid_linear[i](zi)
+        norm = (x ** 2).sum(dim=1).unsqueeze(-1) + (self.mu ** 2).sum(dim=1).unsqueeze(0) - 2 * x @ self.mu.T
+        return torch.exp(- self.gamma.unsqueeze(0) / 2. * norm) * torch.sin(self.linear(x))
 
-        x = self.linear[self.k - 1](zi)  # Eq 3.c
+
+class ResGaborFilter(nn.Module):
+    def __init__(self, in_dim, out_dim, alpha, beta=1.0, bias=True, Bmin=0, Bwidth=16):
+        super().__init__()
+
+        self.Bmin = Bmin
+        self.Bwidth = Bwidth
+
+        r_max = Bmin + Bwidth
+        r_min = Bmin
+        theta = torch.rand(out_dim)*2*np.pi
+        # uniform sampling of radious \in [r_min, r_max]
+        A = 2/(r_max*r_max - r_min*r_min)
+        r = torch.sqrt(2*torch.rand(out_dim)/A + r_min*r_min)
+
+        gamma = torch.zeros([out_dim,in_dim])
+        gamma[:,-2] = r * torch.cos(theta)
+        gamma[:,-1] = r * torch.sin(theta)
+
+        gamma[:,0] = torch.rand(out_dim)
+        gamma = torch.nn.Parameter(gamma)
+
+        mu = torch.zeros((out_dim, in_dim))
+        mu[:,0] = torch.rand((out_dim)) # Time in [0, 1]
+        mu[:,1:] = torch.rand((out_dim, 2)) * 2 - 1 # Space in [-1,1]
+        self.mu = nn.Parameter(mu)
+        self.gamma = nn.Parameter(torch.distributions.gamma.Gamma(alpha, beta).sample((out_dim, )))
+
+        # Init weights
+        self.linear = torch.nn.Linear(in_dim, out_dim, bias=bias)
+        self.linear.weight.data = gamma
+        self.linear.bias.data.uniform_(-np.pi, np.pi)
+
+    def forward(self, x):
+        norm = (x ** 2).sum(dim=1).unsqueeze(-1) + (self.mu ** 2).sum(dim=1).unsqueeze(0) - 2 * x @ self.mu.T
+        return torch.exp(- self.gamma.unsqueeze(0) / 2. * norm) * torch.sin(self.linear(x))
+
+class ResFourierFilter(nn.Module):
+    def __init__(self, in_dim, out_dim, bias=True, Bmin=0, Bwidth=16):
+        super().__init__()
+
+        self.Bmin = Bmin
+        self.Bwidth = Bwidth
+
+        square = False
+        circle = True
+
+        # self.gamma = nn.Parameter(torch.distributions.gamma.Gamma(alpha, beta).sample((out_dim, )))
+        self.linear = torch.nn.Linear(in_dim, out_dim, bias=bias)
         
-        return x, None
+        if square:
+            gamma = torch.nn.Parameter(torch.distributions.uniform.Uniform(0, Bwidth).sample((out_dim, in_dim)))
+            vect = torch.Tensor([[1, 0],[1, 1],[0, 1]])
+            idx = torch.multinomial(torch.ones(len(vect)).float(), num_samples=gamma.shape[0], replacement=True)
+            vects = vect[idx]
+            gamma = gamma + Bmin*vects
+            # central simmetry
+            sign = torch.Tensor([[1,-1],[1,1],[-1,1],[-1,-1]])
+            idx = torch.multinomial(torch.ones(len(sign)).float(), num_samples=gamma.shape[0], replacement=True)
+            sign = sign[idx]
+            gamma = gamma * sign
+
+        if circle:
+            r_max = Bmin + Bwidth
+            r_min = Bmin
+            theta = torch.rand(out_dim)*2*np.pi
+            # uniform sampling of radious \in [r_min, r_max]
+            A = 2/(r_max*r_max - r_min*r_min)
+            r = torch.sqrt(2*torch.rand(out_dim)/A + r_min*r_min)
+
+            gamma = torch.zeros([out_dim,in_dim])
+            gamma[:,-2] = r * torch.cos(theta)
+            gamma[:,-1] = r * torch.sin(theta)
+
+        gamma[:,0] = torch.rand(out_dim)
+        gamma = torch.nn.Parameter(gamma)
+
+        # print(f'Res Fourier Filter: Bmin {Bmin} Bwidth {Bwidth}')
+        # print('-','min', np.min(np.linalg.norm(gamma.detach().numpy(), axis=1)))
+        # print('-','max', np.max(np.linalg.norm(gamma.detach().numpy(), axis=1)/np.sqrt(2), 0))
+
+
+        # Init weights
+        self.linear.weight.data = gamma
+        self.linear.bias.data.uniform_(-np.pi, np.pi)
+
+    def forward(self, x):
+        return torch.sin(self.linear(x))
+
+
+class ResMFN(nn.Module):
+    def __init__(self, in_dim=2, hidden_dim=256, out_dim=1, k=4, data_max_freqs=128):
+        super().__init__()
+
+        # filter_fun = ResFourierFilter
+        # self.g0 = filter_fun(in_dim, hidden_dim, Bmin=0, Bwidth=8) # 8
+        # self.g1 = filter_fun(in_dim, hidden_dim, Bmin=8, Bwidth=8) # 16
+        # self.g2 = filter_fun(in_dim, hidden_dim, Bmin=16, Bwidth=16) # 32
+        # self.g3 = filter_fun(in_dim, hidden_dim, Bmin=32, Bwidth=32) # 64
+        # self.g4 = filter_fun(in_dim, hidden_dim, Bmin=64, Bwidth=64) # 128
+        # self.g5 = filter_fun(in_dim, hidden_dim, Bmin=128, Bwidth=128) # 256
+
+        filter_fun = ResGaborFilter
+        self.g0 = filter_fun(in_dim, hidden_dim, alpha=6.0 / 3, Bmin=0, Bwidth=8) # 8
+        self.g1 = filter_fun(in_dim, hidden_dim, alpha=6.0 / 3, Bmin=8, Bwidth=8) # 16
+        self.g2 = filter_fun(in_dim, hidden_dim, alpha=6.0 / 3, Bmin=16, Bwidth=16) # 32
+        self.g3 = filter_fun(in_dim, hidden_dim, alpha=6.0 / 3, Bmin=32, Bwidth=32) # 64
+        self.g4 = filter_fun(in_dim, hidden_dim, alpha=6.0 / 3, Bmin=64, Bwidth=64) # 128
+        self.g5 = filter_fun(in_dim, hidden_dim, alpha=6.0 / 3, Bmin=128, Bwidth=128) # 256
+
+        self.l1 = torch.nn.Linear(hidden_dim, hidden_dim)
+        self.l2 = torch.nn.Linear(hidden_dim, hidden_dim)
+        self.l3 = torch.nn.Linear(hidden_dim, hidden_dim)
+        self.l4 = torch.nn.Linear(hidden_dim, hidden_dim)
+        self.l5 = torch.nn.Linear(hidden_dim, hidden_dim)
+
+        self.l1.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+        self.l2.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+        self.l3.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+        self.l4.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+        self.l5.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+
+        self.y1 = torch.nn.Linear(hidden_dim, out_dim)
+        self.y2 = torch.nn.Linear(hidden_dim, out_dim)
+        self.y3 = torch.nn.Linear(hidden_dim, out_dim)
+        self.y4 = torch.nn.Linear(hidden_dim, out_dim)
+        self.y5 = torch.nn.Linear(hidden_dim, out_dim)
+
+        self.y1.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+        self.y2.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+        self.y3.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+        self.y4.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+        self.y5.weight.data.uniform_(-np.sqrt(6.0 / hidden_dim), np.sqrt(6.0 / hidden_dim))
+
+    def forward(self, xin, out):
+        z0 = self.g0(xin)
+
+        z1 = self.l1(z0)*self.g1(xin)
+        y1 = self.y1(z1)
+
+        z2 = self.l2(z1)*self.g2(xin)
+        y2 = y1 + self.y2(z2)
+    
+        z3 = self.l3(z2)*self.g3(xin)
+        y3 = y2 + self.y3(z3)
+    
+        z4 = self.l4(z3)*self.g4(xin)
+        y4 = y3 + self.y4(z4)
+
+        z5 = self.l5(z4)*self.g5(xin)
+        y5 = y4 + self.y5(z5)
+        
+        return y1, y2, y3, y4, y5

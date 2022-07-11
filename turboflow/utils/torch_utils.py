@@ -1,3 +1,4 @@
+from itertools import accumulate
 import torch
 
 def get_device(verbose=True):
@@ -19,9 +20,9 @@ def to_torch(x, device):
 def diff(f, x, order=1):
     assert x.requires_grad
     if order == 1:
-        return torch.autograd.grad(f, x, torch.ones_like(f), retain_graph=True, create_graph=True)[0]
+        return torch.autograd.grad(f, x, torch.ones_like(f), retain_graph=True, create_graph=True,)[0]
     if order == 2:
-        return torch.autograd.grad(diff(f, x), x, torch.ones_like(f), retain_graph=True, create_graph=True)[0]
+        return torch.autograd.grad(diff(f, x), x, torch.ones_like(f), retain_graph=True, create_graph=True, )[0]
 
 
 def _my_field_grad(f, dim):
@@ -70,3 +71,9 @@ def _my_field_grad(f, dim):
 
     out[tuple(slice1)] = a * f[tuple(slice2)] + b * f[tuple(slice3)] + c * f[tuple(slice4)]
     return out
+
+def set_grad(nn_module, grad_val):
+    for param in nn_module.parameters():
+        param.requires_grad = grad_val
+
+def to_np(x) : return x.detach().cpu().numpy()

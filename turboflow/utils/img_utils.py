@@ -1,4 +1,5 @@
 import numpy as np
+from PIL import Image, ImageDraw
 
 def bilinear_interpolate(im, x, y):
     x = np.asarray(x)
@@ -25,3 +26,15 @@ def bilinear_interpolate(im, x, y):
     wd = (x-x0) * (y-y0)
 
     return wa*Ia + wb*Ib + wc*Ic + wd*Id
+
+
+def draw_circle(img_dim, r):
+    Rx, Ry = img_dim
+    #size of circle
+    e_x, e_y = r, r
+    #create a box 
+    bbox=((Rx/2)-(e_x/2), (Ry/2)-(e_y/2), (Rx/2)+(e_x/2),(Ry/2)+(e_y/2))
+    img = Image.new("L",(Rx, Ry),color=0)
+    draw1 = ImageDraw.Draw(img)
+    draw1.ellipse(bbox, fill=255)
+    return np.array(img)
