@@ -384,19 +384,19 @@ class plDivFreeRFFNet(pl.LightningModule):
             right = (-(1./3000.)*lapl_w).flatten()
             loss_pde = torch.mean(torch.abs(left - right)**2)
 
-            if self.current_epoch % 10 == 0:
-                plt.figure(figsize=(15,5))
-                plt.suptitle(f'Loss: {loss_pde.item()}')
-                plt.subplot(131)
-                plt.imshow(left.reshape(self.H, self.H).detach().cpu())
-                plt.colorbar()
-                plt.subplot(132)
-                plt.imshow(right.reshape(self.H, self.H).detach().cpu())
-                plt.colorbar()
-                plt.subplot(133)
-                plt.imshow(torch.abs(left-right).reshape(self.H, self.H).detach().cpu())
-                plt.colorbar()
-                plt.show()
+            # if self.current_epoch % 10 == 0:
+            #     plt.figure(figsize=(15,5))
+            #     plt.suptitle(f'Loss: {loss_pde.item()}')
+            #     plt.subplot(131)
+            #     plt.imshow(left.reshape(self.H, self.H).detach().cpu())
+            #     plt.colorbar()
+            #     plt.subplot(132)
+            #     plt.imshow(right.reshape(self.H, self.H).detach().cpu())
+            #     plt.colorbar()
+            #     plt.subplot(133)
+            #     plt.imshow(torch.abs(left-right).reshape(self.H, self.H).detach().cpu())
+            #     plt.colorbar()
+            #     plt.show()
 
             del right
             del left
