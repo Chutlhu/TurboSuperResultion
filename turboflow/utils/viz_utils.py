@@ -88,8 +88,8 @@ def animate_field(xy_img_t, uv_img_t, step=5, scale=20, indexing='ij'):
 
 
 def plot_lr_hr_inset(ulr, uhr, L, H, title=None, 
-region=(0.05, 0.35, 0.45, 0.75),
-figsize=(6,6), add_extremes_in_title=False, only_u=False):
+    region=(0.05, 0.35, 0.45, 0.75),
+    figsize=(6,6), add_extremes_in_title=False, only_u=False):
 
 
     if only_u:
