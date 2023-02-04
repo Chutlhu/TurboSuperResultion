@@ -137,3 +137,6 @@ torch_checkpoints/
 *.pdf
 *.pkl
 *.ckpt
+*.tch
+
+Kolmopy/
